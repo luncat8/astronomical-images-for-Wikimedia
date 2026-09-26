@@ -58,3 +58,15 @@ def test_jpeg_output(tmp_path):
 	path = tmp_path / "p.jpg"
 	save_presentation_jpeg(path, np.ones((3, 4, 4), dtype=np.float32))
 	assert path.exists()
+
+
+def test_blank_pixels_become_black_instead_of_poisoning_the_cast():
+	"""Real drz data has non-finite coverage; np.clip leaves NaN alone and the uint8 cast then
+	raises `invalid value encountered in cast`."""
+	from astroproc.export import to8
+
+	rgb = np.array([[[np.nan, 0.5], [1.0, 0.0]]])
+	out = to8(rgb)
+	assert out.dtype == np.uint8
+	assert out[0, 0, 0] == 0
+	assert out[0, 0, 1] == 128 and out[0, 1, 0] == 255

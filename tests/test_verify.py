@@ -75,3 +75,21 @@ def test_star_colours_recover_ground_truth():
 
 
 THPUT = {"Halpha": 1.0, "OIII": 0.8, "SII": 0.9}
+
+
+def test_stars_on_blank_coverage_do_not_poison_the_colour_report():
+	"""Real drz data has 1.2 % non-finite pixels at the frame edge, and one NaN star was enough
+	to make every number in the report NaN."""
+	from astroproc.verify import detect_stars, star_colour_report
+
+	rgb = np.zeros((3, 64, 64))
+	rgb[:, 20, 20] = [200.0, 180.0, 160.0]
+	rgb[:, 30, 30] = [120.0, 190.0, 260.0]
+	rgb[:, 0, 0] = [400.0, 380.0, 360.0]      # a star on the blank edge
+	rgb[:, 5, :] = np.nan
+	rgb[:, :, 40:] = np.nan
+	coords, fluxes = detect_stars(rgb)
+	assert np.isfinite(fluxes).all()
+	report = star_colour_report(fluxes)
+	assert np.isfinite(report["median_rb"]) and np.isfinite(report["iqr_rb"])
+	assert report["n_stars"] >= 2

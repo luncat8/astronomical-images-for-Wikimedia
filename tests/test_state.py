@@ -48,3 +48,53 @@ def test_median_fraction_metric_uses_percentile_anchor():
 	img[10, 10] = 5000.0
 	report = classify(img)
 	assert report.median_fraction == pytest.approx(0.0, abs=0.01)
+
+
+def test_blank_pixels_do_not_make_the_verdict_silently_wrong():
+	"""Dithered and mosaicked products carry NaN coverage, and np.percentile does not skip it."""
+	img = np.full((128, 128), 100.0, dtype=np.float32)
+	img[40:80, 40:80] = np.nan
+	img[0, 0] = 5000.0
+	report = classify(img)
+	assert report.invalid_fraction == pytest.approx(1600 / 16384, abs=0.001)
+	assert np.isfinite(report.median_fraction), "the decision metric must be a number"
+	assert report.verdict == "linear"
+	assert any("non-finite" in note for note in report.notes)
+
+
+def test_stretched_data_behind_blank_pixels_still_reads_stretched():
+	"""The regression that matters: with NaN present the old metric reported NaN, and NaN > 0.02
+	is False, so stretched data was labelled linear."""
+	channels, _ = make_scene()
+	img = np.clip((channels["Halpha"] - 100.0) / 300.0, 0.0, 1.0) ** 0.4
+	img[40:80, 40:80] = np.nan
+	assert classify(img).verdict == "stretched"
+
+
+def nebula_frame(size=128, sky=100.0, peak=4000.0, sigma=1.2):
+	"""A frame whose subject fills it: broad distribution, no sky peak, median high in the span.
+
+	That is the shape of a real nebula image (measured: WFC3/IR drz of NGC 2174, median/span
+	0.245), and it is what makes the histogram argument uninformative.
+	"""
+	axis = np.linspace(-1.0, 1.0, size)
+	yy, xx = np.meshgrid(axis, axis, indexing="ij")
+	radius = np.hypot(yy, xx)
+	return (sky + peak * np.exp(-(radius / sigma) ** 2)).astype(np.float32)
+
+
+def test_pipeline_provenance_outranks_a_sky_less_histogram():
+	"""A nebula that fills the frame has no sky peak, so only the header can decide."""
+	img = nebula_frame()
+	header = {"BUNIT": "ELECTRONS/S", "NCOMBINE": 2, "INSTRUME": "WFC3"}
+	report = classify(img, header=header)
+	assert report.verdict == "linear", "a drz/drc/i2d product is linear by construction"
+	assert any("linear by construction" in note for note in report.notes)
+
+
+def test_no_pipeline_provenance_keeps_the_histogram_verdict():
+	"""A preview image with no physical unit is still judged by the histogram and still refused."""
+	img = nebula_frame()
+	assert classify(img).median_fraction > 0.02, "the histogram alone must still read stretched"
+	assert classify(img, header={"BUNIT": "DN"}).verdict == "stretched"
+	assert classify(img).verdict == "stretched"

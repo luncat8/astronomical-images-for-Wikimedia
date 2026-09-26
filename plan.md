@@ -29,7 +29,8 @@ are dated because they drift; §15 lists what to re-read before the first upload
    want to start producing today, §14.1 is the smallest viable first upload.
 9. **§16 is the reference implementation** of the pipeline as a scripted, config-driven chain —
    the reproducibility claim (§7.9) is backed by running code, not intent. Its coverage audit
-   (`astroproc audit sparql`) is documented against live Wikidata behaviour in §6.2.1.
+   (`astroproc audit sparql`, then `astroproc audit coords`, then `astroproc audit mast`) is
+   documented against live Wikidata, Sesame and MAST behaviour in §6.2.1 and §6.3.1.
 
 ---
 
@@ -73,8 +74,9 @@ SELECT DISTINCT ?item WHERE {
 Cross-check the resulting coordinates against MAST / ESASky for actual imaging coverage — MAST
 accepts an uploaded target list, which turns this into a to-do list of *objects that have data but
 no picture*. **Coordinates are the missing link, not the image test:** 0 of 327 Sharpless entries
-and 0 of 173 RCW entries in Wikidata carry P625, so §6.3 needs a name resolver (SIMBAD, VizieR,
-HEASarc) before any target list can be built. Triage with SkyView or a PS1 cutout first to discard
+and 0 of 173 RCW entries in Wikidata carry P625, so §6.3 needs a name resolver (Sesame, SIMBAD,
+VizieR, HEASarc) before any target list can be built — `astroproc audit coords` is that step and
+resolves 261 of 273 Sharpless gaps (§6.3.1). Triage with SkyView or a PS1 cutout first to discard
 single stars, duplicates and asterisms. Score the survivors (§6.5) and commit to 5–10 targets.
 Processing 300 candidates is the classic failure mode.
 
@@ -309,9 +311,17 @@ Three consequences for the method:
    prints the designation of every row: a stricter filter is a silent one (`--prefix Coll` returns
    four rows, one of them a false positive; `--prefix Collinder` returns the three real ones).
 3. **Wikidata catalogue stubs have no coordinates.** 0 of 327 Sharpless and 0 of 173 RCW entries
-   carry P625. The audit therefore returns designations and alias sets — the *inputs* to §6.3 — and
-   a name resolver (SIMBAD, VizieR, HEASarc) is a prerequisite for the MAST cross-check, not an
-   optional extra.
+   carry P625. The audit therefore returns designations and alias sets — the *inputs* to §6.3 —
+   and a name resolver is a prerequisite for the MAST cross-check, not an optional extra.
+   Sesame (the CDS resolver, `astroproc audit coords`) fills the gap for 261 of the 273 Sharpless
+   gaps; §6.3.1 has the numbers and what to do about the twelve it does not know.
+4. **The client-side prefix guard must repeat the *server's* rule, per path.** The detail pass
+   hands back every designation of every matched item, so something has to decide which of them is
+   the code and which are aliases. The two paths filtered by different rules — the search index
+   matches a token, the anchored scan matches `STRSTARTS` exactly — and using one rule for both
+   corrupted the shortlist: with the token rule, an item holding both `SH 1-5` and `SH 2-4` (the
+   same object, cross-identified by SIMBAD) was reported under the name `SH 1-5`, a designation
+   outside the class that was scanned. Two rows of 273, and both were wrong names to resolve.
 
 ### 6.3 Method 2 — data-archive-first (most scalable, most overlooked)
 
@@ -350,6 +360,38 @@ the scientific interest, *and* the gap.
 
 Keep one row per candidate — filters, existing colour image?, S/N, interesting?, licence/provenance,
 score — so the shortlist is argued rather than accumulated.
+
+### 6.3.1 What the archive cross-check actually returns (measured live 2026-09-26)
+
+`astroproc audit coords --prefix "SH 2-" --class Q11282` then `astroproc audit mast --radius 0.1`,
+over the 273 Sharpless gaps, logged in `experiments/logs/live-audit.log` and
+`experiments/logs/commons-gap.log`:
+
+| Step | Result |
+|---|---|
+| Resolver (Sesame) | **261 of 273** gaps resolved; the 12 failures are all lettered sub-components (`SH 2-106 A/B/C`, `SH 2-52 A`, …) of regions SIMBAD knows only as a whole |
+| Returned object types | 250 `HII`, and 11 designations that resolve to something else — 2 `PN`, 2 `bub`, 2 `Y*O`, 2 `Ae*`, 1 `LP?`, 1 `OpC`, 1 `bC*`. The `otype` column is a free false-positive detector |
+| MAST, 0.1° cone | **261 of 261** targets have imaging: TESS (`Photometer`, `GPC1`) 258, GALEX 120, SDSS 41, Kepler 33, HST 60+ (STIS/CCD 21, ACS/WFC 17, WFC3/IR 16, NICMOS 31, WFPC2 21), JWST (MIRI 6, NIRSpec 5, NIRCam 4, NIRISS 3) |
+| Targets with **pointed HST/JWST** data | **6**: `SH 2-1`, `SH 2-7`, `SH 2-20`, `SH 2-252 F`, `SH 2-285`, `SH 2-289` |
+| Commons / enwiki check on those 6 | no Commons category for any of them; enwiki articles exist for `Sh 2-1` and `Sh 2-7` and **neither has a lead image**; `Sh 2-20` is illustrated as `RCW 141` |
+
+Three consequences:
+
+1. **"Does archive data exist?" is the wrong question, because the answer is yes for everything.**
+   TESS sectors and GALEX tiles cover the whole sky, so all 261 targets answer "yes" and the
+   check discriminates nothing. What separates a candidate is a **pointed** observation: 6 of 261,
+   2.3 %. Query the archive, then filter for a mission that *aimed* at the object — a survey
+   footprint is coverage, not an opportunity.
+2. **P18 is a proxy, and the proxy fails in both directions.** `SH 2-20` came out of the audit as
+   a gap because the Wikidata item has no P18 image, and it is in fact illustrated under
+   `RCW 141` — the cross-identification trap §6.2 warns about, hit by a real object on the first
+   candidate batch. Conversely two of the survivors have an English Wikipedia article with **no
+   lead image**, which is the purest form of G0 and is invisible to P18.
+3. **A free-text search is not a test of whether a catalogue code is illustrated.** Commons
+   CirrusSearch strips punctuation, so `"SH 2-1"` returns twenty files including a widefield rho
+   Ophiuchi shot and an 1890s hymnal. Use the **Commons category sitelink** on the item (exact;
+   here, absent for all six) and treat full-text hits as evidence to read, not as a count. And an
+   absent category is weak evidence in the other direction too — categories hide files.
 
 ### 6.4 Methods 3 and 4 — reverse audit, and timeliness
 
@@ -422,6 +464,16 @@ composited — check HDU count, extension names, header keywords. **Mosaic?** Ch
 function (asinh/arcsinh with a known shadow-clip point, or whatever was used) to return to linear
 space. Compositing stretched data gives wrong inter-channel ratios, therefore wrong colour, and no
 amount of later curve work will fix it. This finding determines whether §7.3 is even possible.
+
+**The histogram argument needs exposed sky.** A subject that fills the frame — most nebulae, most
+galaxies close up — has no sky peak, so the background estimate sits inside the object's own light
+and every linear product reads stretched (measured 2026-09-26: a linear WFC3/IR drizzle of
+NGC 2174 at median/span 0.25 against a 0.02 threshold). When a product declares a physical `BUNIT`
+**and** standard pipeline provenance (`NCOMBINE`, `DRIZCORR`, `CAL_VER`, `PFLTFILE`, `OPUS_VER`), it
+is linear by construction and the header outranks the histogram — with the disagreement recorded,
+because "auto is not anonymous" applies to a diagnostic too. `BUNIT = DN` is no evidence: it is also
+the unit of a stretched preview. Products that are neither (a screen grab, an unlabelled JPEG) are
+still judged by the histogram and still refused.
 
 ### 7.2 Calibration (own raw data only)
 
@@ -766,9 +818,18 @@ self-contained so a fork can reimplement without reading the code.
 | `config.py` | D3 | TOML run contract (see 16.2); validates channels, anchor, throughput, stretch keys, post ranges |
 | `pipeline.py` | §7 | enforces the order, refuses already-stretched inputs, saturation-masks before the stretch, assigns colour before the stretch, forks the two outputs after it |
 | `cli.py` | — | `state` / `process` / `verify` / `audit` |
-| `audit/sparql.py` | §6.2, 0.B | Wikidata P18 batch audit: search-index enumeration with a class-anchored SPARQL fallback (§6.2.1), batched detail pass for labels, coordinates and the alias set; fetch separated from parse |
-| `audit/mast.py` | §6.3 | observation coverage for an uploaded target list (CSV: name,ra,dec); DRZ/DRC/CAL/I2D product fetch |
+| `audit/http.py` | — | the retry contract every remote service needs: retry a read timeout, wait out a 429 per `Retry-After`, never retry a server-side 504 |
+| `audit/sparql.py` | §6.2, 0.B | Wikidata P18 batch audit: search-index enumeration with a class-anchored SPARQL fallback (§6.2.1), batched detail pass for labels, coordinates and the alias set; the client-side prefix guard repeats the *server's* matching rule, per path; fetch separated from parse |
+| `audit/coords.py` | §6.2.1, §6.3 | designation → ICRS coordinates through Sesame, batched, with the answering catalogue recorded; a name that fails is retried with the cross-identifications the audit already collected; writes the `name,ra,dec` CSV `audit mast` consumes |
+| `audit/mast.py` | §6.3 | observation coverage for a target list (CSV: name,ra,dec), cone radius explicit, targets without coordinates counted and skipped; DRZ/DRC/CAL/I2D product fetch |
 | `audit/score.py` | §6.5, §13.1 | 10-row rubric with hard gates on rows 1–2, dossier renderer |
+
+`experiments/fetch_data.py` fetches a real pointed dataset (plan §4.4): it constructs the MAST
+Download URIs directly, because the product-listing service was failing for every observation while
+the Download service answered, probes each candidate level with a one-byte range request, resumes
+interrupted transfers, and writes a `manifest.csv` with the observation metadata read from the FITS
+header itself plus a sha256 — provenance that travels with the data instead of being reconstructed
+afterwards.
 
 ### 16.2 The run contract
 
@@ -789,7 +850,8 @@ params.json             the same record, machine-readable
 
 1. The §7 order is enforced, not advisory: colour is assigned before the stretch, and exactly one
    stretch with one parameter set touches all channels.
-2. Already-stretched input is refused with an explanation, never silently composited.
+2. Already-stretched input is refused with an explanation, never silently composited. The verdict is
+   the histogram *or* a pipeline product's own header, and which one decided is in the log.
 3. Saturation in any channel masks the pixel from the stretch and from star selection.
 4. Two outputs, forked at the stretch; the presentation post never feeds back.
 5. Every number the code chose automatically is still written down — auto is not anonymous.
@@ -805,5 +867,17 @@ rotated WCS is detected, that stretched input is refused, that the log is comple
 white patch stays white after sky-match gains. `experiments/demo_run.py` produces a demo SHO
 composite plus its log; `experiments/stretch_perf.py` measures the hot path (~115 Mpixel/s at 4k²,
 one float32 scratch buffer). `experiments/live_audit.py` is the network half: it counts the
-Wikidata gaps per catalogue through both enumeration paths and prints shortlists
-(`experiments/logs/live-audit.log`), which is what §6.2.1 records.
+Wikidata gaps per catalogue through both enumeration paths, prints shortlists, resolves the
+Sharpless gaps to coordinates and runs the §6.3 cone search on all 261 that resolved
+(`experiments/logs/live-audit.log`, which is what §6.2.1 and §6.3.1 record).
+`experiments/commons_gap.py` is the part P18 cannot do: it takes the gap CSV and, per candidate,
+reports the cross-identifications, the Commons category, the enwiki lead image and — labelled as
+noise — the full-text hits (`experiments/logs/commons-gap.log`).
+
+The chain, end to end, exactly as run for §6.3.1:
+
+```
+astroproc audit sparql --prefix "SH 2-" --class Q11282 --out out/sharpless-gaps.csv
+astroproc audit coords --csv out/sharpless-gaps.csv --out out/sharpless-coords.csv
+astroproc audit mast out/sharpless-coords.csv --radius 0.1
+```

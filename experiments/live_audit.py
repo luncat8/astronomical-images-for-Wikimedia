@@ -1,20 +1,24 @@
-"""Live Wikidata coverage audit (plan §6.2, entry point 0.B) — the real network run.
+"""Live coverage audit chain (plan §6.2 + §6.3, entry point 0.B) — the real network run.
 
-The offline tests prove the logic; only this script proves the *numbers*. It measures
-the gap count per catalogue through both enumeration paths, prints a shortlist, and runs
-the §6.3 MAST cross-check on the few targets that do carry coordinates. Requires network
-access to wikidata.org and mast.stsci.edu, and astropy/astroquery for the last section.
+The offline tests prove the logic; only this script proves the *numbers*. It measures the gap
+count per catalogue through both enumeration paths, prints shortlists, resolves the Sharpless
+gaps to coordinates (catalogue stubs carry none) and runs the §6.3 archive cross-check on them.
+Needs wikidata.org, vizier.cds.unistra.fr and mast.stsci.edu, plus astropy/astroquery for the
+coverage section.
 
-	experiments/live_audit.py [shortlist_size]
+	experiments/live_audit.py [shortlist_size] [cone_radius_deg]
 """
 
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent / "src"))
 
+from astroproc.audit.coords import resolve_gaps  # noqa: E402
+from astroproc.audit.mast import coverage  # noqa: E402
 from astroproc.audit.sparql import gap_count, missing_p18  # noqa: E402
 
 HII_REGION = "Q11282"          # the P31 anchor that makes a STRSTARTS filter affordable
@@ -31,6 +35,12 @@ CATALOGUES = [
 	("UGC", None),
 	("PGC", None),
 ]
+OUT = HERE / "out"
+# TESS sectors and GALEX tiles cover the whole sky, so "some data exists" is true for almost
+# every target and says nothing. What separates a candidate from the rest is a pointed
+# observation: HST, JWST, or a filter set with more colour in it than a survey.
+POINTED = ("HST", "JWST", "WFC3", "ACS", "NIRC", "NIRCam", "WFPC2")
+CHUNK = 25
 
 
 def count_row(prefix, p31):
@@ -52,17 +62,44 @@ def shortlist(prefix, p31, size):
 		print(f"  {row['item']}  {row['label'] or '-':<28} [{'; '.join(row['codes'])}]{aliases}  {coords}")
 
 
-def mast_section():
-	"""§6.3 cross-check. M31/M33 stand in for the real shortlist: catalogue stubs carry no
-	coordinates at all (0 of 327 Sharpless entries), so this is the shape of the check, not
-	the check itself — a name resolver has to run first."""
-	from astroproc.audit.mast import coverage
+def coverage_section(radius_deg):
+	"""§6.3 on the real shortlist: gaps -> coordinates -> archive cone search."""
+	from astroproc.audit.coords import write_targets
 
-	targets = HERE / "out" / "mast-targets.csv"
-	targets.parent.mkdir(parents=True, exist_ok=True)
-	targets.write_text("name,ra,dec\nM31,44.95,40.383333\nM33,31.433333,-26.483333\n", encoding="utf-8")
-	print("\nMAST observation coverage (astroquery, live)")
-	print(coverage(targets))
+	OUT.mkdir(parents=True, exist_ok=True)
+	targets = OUT / "sharpless-coords.csv"
+	rows, total = guarded("resolve", lambda: resolve_gaps("SH 2-", p31=HII_REGION, limit=300))
+	if isinstance(rows, str):
+		print(f"\nMAST cross-check skipped: {rows}")
+		return
+	write_targets(rows, targets)
+	resolved = [row for row in rows if row["ra"] is not None]
+	print(f"\nresolved {len(resolved)} of {total} Sharpless gaps -> {targets}")
+	types = Counter(row["otype"] or "?" for row in resolved)
+	print(f"types: {', '.join(f'{otype}={n}' for otype, n in types.most_common(6))}")
+	print(f"unresolved: {', '.join(r['name'] for r in rows if r['ra'] is None) or 'none'}")
+
+	print(f"\nMAST coverage at {radius_deg} deg, {len(resolved)} cone searches, live")
+	instruments, hits = Counter(), 0
+	pointed = []
+	for start in range(0, len(resolved), CHUNK):
+		chunk = resolved[start:start + CHUNK]
+		table = guarded(f"chunk {start}", lambda: coverage(chunk, radius_deg=radius_deg))
+		if isinstance(table, str):
+			print(f"  {table}")
+			continue
+		for row in table:
+			instruments.update(name for name in row["instruments"].split(",") if name != "-")
+			hits += 1 if row["n_obs"] > 0 else 0
+			if any(name in POINTED for name in row["instruments"].split(",")):
+				pointed.append((row["target"], row["n_obs"], row["instruments"], row["filters"]))
+		print(f"  {min(start + CHUNK, len(resolved))}/{len(resolved)} checked", flush=True)
+
+	print(f"targets with any imaging: {hits}/{len(resolved)}")
+	print(f"instruments seen: {instruments.most_common()}")
+	print(f"pointed observations (HST/JWST): {len(pointed)}")
+	for target, n_obs, names, filters in pointed:
+		print(f"  {target:<10} {n_obs:>4} obs  {names[:70]:<70} {filters[:60]}")
 
 
 def guarded(label, work):
@@ -70,17 +107,18 @@ def guarded(label, work):
 	try:
 		return work()
 	except Exception as exc:
-		return f"  FAILED  {type(exc).__name__}: {exc}"
+		return f"  FAILED  {label}  {type(exc).__name__}: {exc}"
 
 
 def main():
 	size = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+	radius = float(sys.argv[2]) if len(sys.argv) > 2 else 0.1
 	print("gap counts per catalogue, live Wikidata")
 	for prefix, p31 in CATALOGUES:
 		print(guarded(repr(prefix), lambda: count_row(prefix, p31)))
 	shortlist("SH 2-", HII_REGION, size)
 	shortlist("RCW", None, size)
-	mast_section()
+	coverage_section(radius)
 
 
 if __name__ == "__main__":

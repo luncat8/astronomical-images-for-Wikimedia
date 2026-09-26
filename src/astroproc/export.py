@@ -17,7 +17,7 @@ def srgb_icc_bytes() -> bytes:
 
 
 def to8(rgb01):
-	return (np.clip(rgb01, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+	return (np.nan_to_num(np.clip(rgb01, 0.0, 1.0)) * 255.0 + 0.5).astype(np.uint8)
 
 
 def _hwc(rgb01):
@@ -36,7 +36,7 @@ def save_linear_reference(path, linear_rgb, header_cards):
 
 def save_data_version_tiff(path, rgb01):
 	"""16-bit RGB TIFF of the stretched data version (plan §7.8: keep a 16-bit master)."""
-	data = (np.clip(_hwc(rgb01), 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)
+	data = (np.nan_to_num(np.clip(_hwc(rgb01), 0.0, 1.0)) * 65535.0 + 0.5).astype(np.uint16)
 	tifffile.imwrite(path, data, photometric="rgb", metadata=None)
 
 

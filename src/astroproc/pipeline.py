@@ -28,7 +28,7 @@ def _load_channels(cfg):
 		data, header = load_image(path)
 		images[name] = np.asarray(data, dtype=np.float32)
 		headers[name] = header
-		reports[name] = classify(images[name], sat_limit=header.get("SATURATE"))
+		reports[name] = classify(images[name], sat_limit=header.get("SATURATE"), header=header)
 		reports[name].path = str(path)
 		reports[name].provenance = header_provenance(header)
 	return images, headers, reports
@@ -56,7 +56,9 @@ def run(cfg: RunConfig, write_outputs=True) -> RunResult:
 			"Provide linear products (JWST cal/i2d, HST drz/drc) or an explicit inverse stretch."
 		)
 	session.record(3, "all inputs linear (histogram core fraction: "
-	                  + ", ".join(f"{n} {r.core_fraction:.4f}" for n, r in reports.items()) + ")")
+	                  + ", ".join(f"{n} {r.core_fraction:.4f}" for n, r in reports.items())
+	                  + "; non-finite pixels excluded: "
+	                  + ", ".join(f"{n} {r.invalid_fraction:.2%}" for n, r in reports.items()) + ")")
 	session.record(2, "archive data assumed calibrated - no own calibration applied (plan §7.2)")
 	session.record(5, "not required - inputs verified linear")
 	session.provenance_from(reports)

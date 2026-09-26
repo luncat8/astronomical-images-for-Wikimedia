@@ -5,7 +5,8 @@ Notes for LLM agents working in this repo. Reusable lessons only; implementation
 ## Sandbox / environment
 
 - Only pypi.org is reliably reachable; Wikimedia, SIMBAD, MAST, PS1 and other astronomy endpoints are blocked at network level. Build network-touching code against the real APIs but keep I/O isolated at module edges (e.g. `audit/sparql.py` separates `missing_p18` from `parse_response`), and validate logic offline with synthetic data.
-- **That snapshot was wrong, and it flipped mid-session (2026-09-26):** query.wikidata.org, www.wikidata.org, mast.stsci.edu and heasarc became reachable while SIMBAD and ps1.stsci.edu stayed blocked, and even pypi timed out on the first attempt and worked on the second. Test connectivity per host, do not assume a uniform sandbox, and re-test before declaring a run impossible.
+- **That snapshot was wrong, and it flipped twice in one session (2026-09-26):** query.wikidata.org, www.wikidata.org, mast.stsci.edu and heasarc became reachable while SIMBAD and ps1.stsci.edu stayed blocked, and even pypi timed out on the first attempt and worked on the second. Later the same day vizier.cds.unistra.fr, the simbad.cfa.harvard.edu mirror and cdsarc also answered. Test connectivity per host, do not assume a uniform sandbox, and re-test before declaring a run impossible — a resolver that was blocked is usually blocked at one hostname only.
+- **Never pipe a long-running command into `head`.** `astroproc audit coords ... | head -8` died of SIGPIPE after the eighth line and never wrote its output file, which then looked like a stale-result bug. Redirect to a log (`2>&1 | tee log`) or write to a file; a run that both prints a summary and writes an artifact needs `python -u` if you want to watch it.
 - `python3 -m venv .venv` **fails on this filesystem**: `Operation not permitted: 'lib' -> '.venv/lib64'`
   (the lib64 symlink), and `--copies` does not help. Create the venv outside the repo
   (`python3 -m venv /tmp/kilo/astrovenv`) and run `pytest` from the repo root — `pyproject.toml`
@@ -49,6 +50,99 @@ Notes for LLM agents working in this repo. Reusable lessons only; implementation
   mast targets.csv` (M31: 15 observations, TESS g,i,r,y,z). The MAST host answers even when
   SIMBAD and PS1 are blocked, so a partial network still supports the §6.3 check — if the target
   list has coordinates.
+
+## Name resolution (Sesame / CDS)
+
+- **Sesame is the resolver that works when SIMBAD's own host does not.** `simbad.u-strasbg.fr`
+  and `simbad.cds.unistra.fr` were blocked while `simbad.cfa.harvard.edu` answered 200, and the
+  CDS resolver answers through the VizieR host: `https://vizier.cds.unistra.fr/cgi-bin/nph-sesame/-oxp/SNV`.
+  The `cds.unistra.fr/sesame/` path 404s; the `cgi-bin/nph-sesame` path on the VizieR host
+  302-redirects there and must be followed.
+- **The batch form is a bare query string, and every other form fails silently.** `?Sh2-104&RCW%205`
+  resolves both. `?Name=Sh2-104&Name=RCW+5` and `?Sh2-104=` both return a *well-formed* "nothing
+  found" document for the literal names `Name=Sh2-104` and `Sh2-104=` — no error, no exception,
+  just an empty result that looks exactly like a catalogue that does not exist. A params dict
+  always emits `=`, so build the query string by hand with `urllib.parse.quote(name, safe="")`.
+- **A Target carries one Resolver per database and one position each.** Take the first resolver
+  with a `jradeg`; a resolver with only `<INFO>from cache</INFO>` has no position and Sesame
+  consulted the next database for a reason.
+- **Keep the answering catalogue in the output.** `<Resolver name="Sc=Simbad (CDS, via
+  client/server)">` vs `N=Ned` vs a survey catalogue is provenance, and a cone search is only as
+  good as the position at its centre. The `otype` is the cheap false-positive detector: 250 of 261
+  resolved Sharpless gaps came back `HII`, and the other eleven came back as stars, planetary
+  nebulae and a bubble — visible without opening a single SIMBAD tab.
+- **Nothing found is an answer worth keeping.** The twelve unresolved Sharpless designations
+  (`SH 2-52 A`, `SH 2-106 A/B/C`, ...) are all lettered sub-components of a region whose parent
+  SIMBAD does know; dropping them from the CSV would have hidden a real, if dull, gap class.
+
+## astroquery / MAST
+
+- **`set(obs["instrument_name"])` raises `TypeError: unhashable type: 'MaskedConstant'`.** MAST
+  returns masked values where the instrument or filter is unknown, and a masked value is neither a
+  string nor hashable. Go through `column.filled("")` and drop `"--"` and `"CLEAR"`.
+- **A cone search finds pointed observations, not survey coverage.** At a 0.1 deg cone, the
+  Sharpless positions return something for every single target — TESS sectors, GALEX tiles, SDSS and
+  Kepler all answer — so "does data exist?" discriminates nothing, and the cone radius is not even
+  the issue. The useful cut is the **pointing separation against the instrument footprint**: an
+  ACS/HRC field is 29" and a 3.8'-distant exposure contains none of the object. Compute the
+  separation from the observation's own `s_ra`/`s_dec` and compare it with the field of view, or the
+  shortlist will be six targets that do not exist.
+- **The product-listing service was down for the whole session (2026-09-26, later).**
+  `Observations.get_product_list` and `Observations.query_criteria(obsid=...)` both fail with
+  `RemoteServiceError: Error converting data type varchar to bigint` — a MAST-side database fault,
+  not a client error — while the *cone search* keeps answering. `download_products` goes through the
+  broken path, so it fails too.
+  The **Download service itself is healthy** and the per-visit products follow a fixed naming
+  convention, so build the URI instead of looking it up:
+  `https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HST/product/<obsid>/<obsid>_drz.fits`
+  with `Range: bytes=0-0` as a 41-byte existence probe, then the same URI for the body. `_drc` (the
+  preferred level, CTE-corrected) does not exist for WFC3/IR, so probe the levels in order.
+- **A FITS header is the better provenance source anyway.** With the metadata service failing,
+  `BUNIT`/`INSTRUME`/`FILTER`/`EXPTIME`/`PROPOSID`/`TARGNAME` in the file are authoritative and cost
+  nothing. They are also where the cross-identification lives: the WFC3 file fetched as "SH 2-252 F"
+  declares `TARGNAME = NGC 2174`, and NGC 2174 is already illustrated on Commons *and* on Wikipedia.
+  A candidate's real name is frequently absent from its Wikidata item (P528 held only `SH 2-252 F`).
+
+## Non-finite pixels in real archive products
+
+The same class of bug, found four times in one run, and the synthetic test scene cannot find it
+because it has no blank coverage. A dithered or mosaicked product writes NaN (or inf) where there was
+no exposure, and **almost every percentile silently returns NaN**:
+
+- `np.percentile` on an array with a few NaN pixels returns NaN, and `NaN > threshold` is `False`.
+  The §7.1 verdict metric became NaN, and a *stretched* product is exactly the case where the
+  comparison must not default to "linear".
+- `np.median` over star fluxes containing one NaN made the whole R/B report `nan, nan` on an
+  otherwise ordinary frame. Star apertures that reach into blank coverage must be **dropped**, not
+  zero-filled: a filled aperture invents a dark measurement.
+- `auto_params` returned `high_point=nan`, which propagates through the asinh and turns the entire
+  composite into blank coverage.
+- `np.clip` does not touch NaN, so the 8-bit and 16-bit casts emitted
+  `RuntimeWarning: invalid value encountered in cast` and wrote garbage pixels.
+
+Rule: every statistic is computed on the finite subset, the invalid fraction is reported next to the
+result, and blank coverage becomes black on export.
+
+## A histogram needs exposed sky
+
+The §7.1 test ("narrow sky peak + long tail" vs "flat and wide") assumes the frame contains
+background sky. **A nebula that fills the frame has no sky peak**: its median sits inside the
+object's own light, so median/span reads high and linear data is refused with the wrong reason —
+measured on a linear WFC3/IR drizzle at 0.25 against a 0.02 threshold, while the plan itself tells
+you to start at drz/drc products. A product that declares a physical `BUNIT` **and** standard
+pipeline provenance (`NCOMBINE`, `DRIZCORR`, `CAL_VER`, `PFLTFILE`, `OPUS_VER`) is linear by
+construction; the header then outranks the histogram and the disagreement is written into the report.
+`BUNIT = DN` counts as no evidence: it is also the unit of a stretched 8-bit preview.
+
+## Two defaults that were never choices
+
+- `build_stretch_params` filled any key the config omitted with `shadow_clip=0.0`,
+  `high_point=1.0`. Those are plausible defaults **in normalised pixel units and nowhere else**: on a
+  real product in electrons/s they compress the object into the top octave, and nothing in the log
+  said the numbers had not been chosen. Auto is now per key.
+- `out_dir` was resolved against the shell's working directory while every *input* path was resolved
+  against the config file, so a run started from the repository root wrote its entire output tree
+  (`data-linear.fits`, 13 MB, `presentation.png`, log) to `/media/sf_1/data/` — outside the project.
 
 ## Editing files in this agent environment
 

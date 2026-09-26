@@ -17,28 +17,29 @@ A class-anchored SPARQL scan (`--class`) covers the space-separated spellings, b
 
 Both paths hand the same Q-ids to one batched detail pass, which adds what neither can: the rest
 of the designation set (a gap under one code is often covered under another, §6.2) and
-coordinates — which most catalogue stubs simply do not carry, so a coordinate fallback
-(SIMBAD/VizieR by designation) belongs in the workflow rather than in this query.
+coordinates — which most catalogue stubs simply do not carry, so designations go on to the
+resolver in `coords.py`, which is what the §6.3 archive cross-check consumes.
 
 Both endpoints are flaky under load and the Action API rate-limits anonymous bursts, so every call
-goes through `_request`, which retries a read timeout and honours `Retry-After` on a 429.
+goes through `audit.http.request`, which retries a read timeout and honours `Retry-After` on a 429.
 """
 
-import time
+import csv
+from pathlib import Path
 
-import requests
+from .http import request
 
 API = "https://www.wikidata.org/w/api.php"
 ENDPOINT = "https://query.wikidata.org/sparql"
 USER_AGENT = "astroproc/0.1 (Wikimedia astronomy coverage audit; plan.md §6.2)"
 
 GAP_SEARCH = "haswbstatement:P528={prefix}* -haswbstatement:P18"
+GAP_COLUMNS = ("designation", "aliases", "item", "label", "ra", "dec")
 PAGE = 50
 SROFFSET_CAP = 10000
 VALUES_BATCH = 60
 ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 MAX_SPLIT_DEPTH = 4
-RETRY_AFTER = 5.0
 
 # "en,mul": catalogue stubs often have only a multilingual label (Q3928208 -> "RCW 114"),
 # and without the fallback the label service silently answers with the bare Q-id.
@@ -61,9 +62,6 @@ CLASS_COUNT_QUERY = "SELECT (COUNT(DISTINCT ?item) AS ?n) WHERE {{" + CLASS_TAIL
 CLASS_IDS_QUERY = (
 	"SELECT DISTINCT ?item WHERE {{" + CLASS_TAIL + "}}\nORDER BY ?cat\nLIMIT {limit}"
 )
-
-_http = requests.Session()
-
 
 def gap_count(prefix, timeout=60, p31=None):
 	"""Number of catalogue entries with this prefix that carry no P18 image."""
@@ -97,23 +95,26 @@ def missing_p18(prefix, limit=200, timeout=60, p31=None):
 	the reason a coordinate fallback (SIMBAD/VizieR by designation) belongs in the workflow.
 	"""
 	ids, total = candidate_ids(prefix, limit, timeout, p31)
-	return parse_response(_detail_payload(ids, timeout), prefix=prefix), total
+	# The two paths filtered server-side by different rules, so the client guard must differ too.
+	return parse_response(_detail_payload(ids, timeout), prefix=prefix, anchored=bool(p31)), total
 
 
-def parse_response(payload, prefix=""):
+def parse_response(payload, prefix="", anchored=False):
 	"""One row per item: matching codes, every other code as an alias, coordinates if any.
 
 	An item repeats once per designation it is known by (NGC 6334 also has RCW 127, GUM 62,
 	SH2-8, ...), so the raw bindings are grouped here rather than reported as duplicates.
 	Items with no matching code at all are dropped — the index can match a token of a code
-	that no longer carries the prefix.
+	that no longer carries the prefix. `anchored` says which server-side rule produced the ids,
+	because the detail pass hands back every code of every matched item and only the matching
+	rule can tell a code from an alias.
 	"""
 	rows = {}
 	for binding in payload["results"]["bindings"]:
 		qid = binding["item"]["value"].rsplit("/", 1)[-1]
 		row = rows.setdefault(qid, _row(qid, binding))
 		code = binding.get("cat", {}).get("value", "")
-		if _matches(code, prefix):
+		if _matches(code, prefix, anchored):
 			row["codes"].append(code)
 		else:
 			row["aliases"].append(code)
@@ -128,21 +129,52 @@ def parse_response(payload, prefix=""):
 	)
 
 
+def write_gaps(rows, path):
+	"""Write the gap shortlist so the next step reads a file instead of the terminal.
+
+	Columns: designation, aliases, item, label, ra, dec. `aliases` is the cross-identification
+	set from the detail pass, which `coords.py` retries unresolved names with, so nothing the
+	audit learned is lost between the two commands. A gap the entry already placed itself
+	(rare, but P625 exists on some items) keeps those coordinates and is not re-resolved.
+	"""
+	records = [{
+		"designation": ";".join(row["codes"]),
+		"aliases": ";".join(row["aliases"]),
+		"item": row["item"],
+		"label": row["label"],
+		"ra": row.get("ra", ""),
+		"dec": row.get("dec", ""),
+	} for row in rows]
+	with Path(path).open("w", newline="", encoding="utf-8") as handle:
+		writer = csv.DictWriter(handle, fieldnames=list(GAP_COLUMNS))
+		writer.writeheader()
+		writer.writerows(records)
+	return path
+
+
 def parse_search(payload):
 	"""Q-ids of one `list=search` page."""
 	return [hit["title"] for hit in payload.get("search", [])]
 
 
-def _matches(code, prefix):
-	"""Does this designation belong to the prefix? The first token must start with it.
+def _matches(code, prefix, anchored=False):
+	"""Does this designation belong to the prefix? The rule is the one the server used.
 
-	The index matches a *token* prefix, so this repeats its semantics instead of guessing at
-	them: "Coll" covers "Collinder 69" because that is the token, and it also covers
-	"Collezione Ansaldi B 905" because that is what `Coll*` returns. Over-matching is left
-	visible in the printed codes — a stricter rule here silently emptied a real shortlist,
-	turning four Collinder gaps into zero rows. Narrow the prefix (`--prefix Collinder`) to
-	cut the noise; §6.2.1 lists the catalogues where the short prefixes collide.
+	Anchored (SPARQL `FILTER(STRSTARTS(?cat, "<prefix>"))`): the code must start with the prefix.
+	That is exact, and the client guard has to be exact too — the looser token rule admits every
+	"SH <n>-<m>" code, so a shortlist for "SH 2-" reported "SH 1-15" and "SH 1-5" under their own
+	names when the server had matched them through the alias "SH 2-4" they also carry. An alias
+	must be shown as an alias.
+
+	Index (`haswbstatement:P528=<prefix>*`): the first token must start with the prefix, because
+	that is what the search index matches on. Repeating its semantics instead of guessing at them
+	keeps "Coll" covering "Collinder 69" (that is the token) and also "Collezione Ansaldi B 905"
+	(that is what `Coll*` returns). Over-matching stays visible in the printed codes — a stricter
+	rule here silently emptied a real shortlist, turning four Collinder gaps into zero rows.
+	Narrow the prefix (`--prefix Collinder`) to cut the noise; §6.2.1 lists the collisions.
 	"""
+	if anchored:
+		return code.strip().lower().startswith(prefix.strip().lower())
 	return _token(code).startswith(_token(prefix.strip()))
 
 
@@ -195,7 +227,7 @@ def _class_total(p31, prefix, timeout):
 
 def _search(prefix, offset, limit, timeout):
 	"""One Action API call for the gap query of prefix."""
-	response = _request("GET", API, timeout=timeout, params={
+	response = request("GET", API, timeout=timeout, params={
 		"action": "query",
 		"list": "search",
 		"srsearch": GAP_SEARCH.format(prefix=prefix),
@@ -209,7 +241,7 @@ def _search(prefix, offset, limit, timeout):
 
 def _sparql(query, timeout):
 	"""Run a query on WDQS and return its bindings."""
-	response = _request(
+	response = request(
 		"POST",
 		ENDPOINT,
 		timeout=timeout,
@@ -217,26 +249,6 @@ def _sparql(query, timeout):
 		headers={"Accept": "application/sparql-results+json"},
 	)
 	return response.json()["results"]["bindings"]
-
-
-def _request(method, url, timeout, attempts=3, **kwargs):
-	"""One call, retried on a read timeout and on 429. Both Wikidata endpoints fail
-	sporadically under load — a run of twelve catalogue counts lost two to a read timeout
-	and a shortlist to a 429 (experiments/logs/live-audit.log) — and both name the fix:
-	retry, honouring `Retry-After`. A server-side 504 is not retried: that query was too
-	slow, and asking again just spends the budget twice."""
-	headers = {**kwargs.pop("headers", {}), "User-Agent": USER_AGENT}
-	for attempt in range(attempts):
-		try:
-			response = _http.request(method, url, headers=headers, timeout=timeout, **kwargs)
-			if response.status_code == 429 and attempt < attempts - 1:
-				time.sleep(float(response.headers.get("Retry-After", RETRY_AFTER)))
-				continue
-			response.raise_for_status()
-			return response
-		except (requests.Timeout, requests.ConnectionError):
-			if attempt == attempts - 1:
-				raise
 
 
 def _detail_payload(ids, timeout):

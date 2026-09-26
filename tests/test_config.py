@@ -99,3 +99,33 @@ def test_stretch_params_auto_when_absent(tmp_path):
 	rng_img = (np.arange(3 * 16 * 16, dtype=np.float32).reshape(3, 16, 16) % 7) / 7.0
 	p = build_stretch_params(cfg, rng_img)
 	assert p.high_point > p.shadow_clip > 0.0
+
+
+def test_out_dir_resolves_like_the_input_paths(tmp_path):
+	"""An earlier run wrote its whole output tree outside the project, because the output
+	directory was the one path resolved against the shell's working directory."""
+	from astroproc.config import load_config
+
+	(tmp_path / "run.toml").write_text('[run]\nname = "r"\n\n[inputs]\nHalpha = "../in.fits"\n'
+	                                   '\n[post]\ndir = "../out/r"\n')
+	cfg = load_config(tmp_path / "run.toml")
+	assert cfg.out_dir == tmp_path.parent / "out" / "r"
+	assert cfg.out_dir.is_absolute()
+
+
+def test_partial_stretch_block_auto_decides_the_missing_keys():
+	"""A [stretch] block that only sets the background level must not ship shadow_clip=0,
+	high_point=1 — those are defaults in pixels, not in the data's own linear units."""
+	import numpy as np
+	from pathlib import Path
+	from astroproc.config import RunConfig, build_stretch_params
+	from astroproc.stretch import auto_params
+
+	rgb = np.linspace(0.0, 10.0, 64 * 64).reshape(64, 64)[None].repeat(3, axis=0)
+	auto = auto_params(rgb, background_level=0.02)
+	cfg = RunConfig(name="r", inputs={}, mapping_cfg={}, anchor=None, throughput={}, sat_limit=None,
+		stretch_cfg={"background_level": 0.02}, background_level=0.02, chroma_denoise=0.0,
+		saturation=1.0, hdr_cores=False, jpeg=False, out_dir=Path("."))
+	params = build_stretch_params(cfg, rgb)
+	assert params.shadow_clip == auto.shadow_clip and params.high_point == auto.high_point
+	assert params.high_point > 1.0, "the high point must come from the data, not from the default"

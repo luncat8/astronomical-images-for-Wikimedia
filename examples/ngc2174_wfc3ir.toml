@@ -1,0 +1,44 @@
+# Real-data run: NGC 2174 (SH 2-252 F) in three WFC3/IR broad bands, HST program 13623.
+# The first run on measured data rather than the synthetic scene (2026-09-26).
+#
+#   astroproc process examples/ngc2174_wfc3ir.toml
+#
+# Wavelength order F105W < F125W < F160W, so `rgb` maps short -> blue, middle -> green, long ->
+# red. That is the continuum ordering and nothing more: in the near-infrared the colour of a
+# reflection nebula is dominated by dust scattering, not by emission-line ratios, and F125W
+# contains no H-alpha (0.656 um). Treat the assignment as provisional until §7.6 has checked
+# star colour against a survey reference, and say so in the description. A physically stronger
+# option for an emission target is F105W as the "blue" dust continuum, F125W as green and F160W
+# as red, with the narrowband emission added separately as an accent, never as the base.
+#
+# The products are per-visit drizzles (NCOMBINE 2, ELECTRONS/S), already registered on one WCS per
+# filter, so the §7.4 alignment step should find offsets below a pixel and record them rather
+# than resample. Cross-visit files (ichx52*) are deliberately *not* used: a dither pattern
+# changes the footprint, and the two visits should be compared for that reason, not averaged.
+
+[run]
+name = "ngc2174-wfc3ir"
+
+[inputs]
+F105W = "../data/SH2-252F/ichx02020_drz.fits"
+F125W = "../data/SH2-252F/ichx02030_drz.fits"
+F160W = "../data/SH2-252F/ichx02040_drz.fits"
+
+[mapping]
+preset = "rgb"                 # short -> blue, long -> red; see the note above
+
+[normalise]
+anchor = "F125W"               # the band with the strongest signal here
+# sat_limit = 65535.0          # no SATURATE keyword in the header; set it if cores clip
+
+[stretch]
+# Omit [stretch] to let auto_params choose from the data: the numbers are frozen into the log
+# either way, and for a nebula that fills the frame the auto choice is the honest starting point.
+background_level = 0.02
+
+[post]
+chroma_denoise = 0.25
+saturation = 1.0               # a first pass stays at 1.0; §10 warns above it
+hdr_cores = true
+jpeg = true
+dir = "../data/out/ngc2174-wfc3ir"

@@ -33,4 +33,4 @@ chroma_denoise = 0.3         # 0..1, chroma-only median blend
 saturation = 1.05            # >1 risks the oversaturation defect (plan §10)
 hdr_cores = true             # blend a low-lift stretch into saturated cores
 jpeg = false                 # extra full-res JPEG next to the PNG
-dir = "out/demo-sho"         # output directory (default: run name)
+dir = "../out/demo-sho"      # output directory, relative to this file (default: run name)

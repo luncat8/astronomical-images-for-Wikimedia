@@ -32,10 +32,17 @@ class StretchParams:
 
 def auto_params(linear_rgb, background_level=0.03, strength=10.0, sc_sigma=0.7):
 	"""SC just above the sky (lifts the faint tail), HP at the 99.9th percentile of the
-	composite luminance. Returned values are frozen into the log — auto only runs once."""
+	composite luminance. Returned values are frozen into the log — auto only runs once.
+
+	Blank coverage is excluded, as everywhere else: `np.percentile` returns NaN when a single
+	percentile lands on one non-finite pixel, and a NaN high point silently turns the whole
+	composite into blank coverage through the stretch (measured 2026-09-26 on a real drz frame
+	with 1.3 % NaN at the edge).
+	"""
 	lum = linear_rgb.mean(axis=0) if linear_rgb.ndim == 3 else linear_rgb
-	sky, std = sky_stats(lum)
-	high = float(np.percentile(lum, 99.9))
+	pixels = lum[np.isfinite(lum)]
+	sky, std = sky_stats(pixels)
+	high = float(np.percentile(pixels, 99.9))
 	sc = sky + sc_sigma * max(std, 1e-12)
 	hp = max(high, sc * 1.5 + 1e-12)
 	return StretchParams(float(sc), hp, strength, background_level)

@@ -24,6 +24,8 @@ def main(argv=None):
 	p_run.add_argument("--out", default=None, help="override output directory")
 
 	p_verify = sub.add_parser("verify", help="run pipeline checks only, write no images")
+	p_verify.add_argument("config")
+	p_verify.add_argument("--out", default=None, help="override output directory")
 
 	p_audit = sub.add_parser("audit", help="coverage audit tooling (plan §6)")
 	audit_sub = p_audit.add_subparsers(dest="audit_cmd", required=True)
@@ -31,8 +33,21 @@ def main(argv=None):
 	p_sparql.add_argument("--prefix", required=True, help='catalogue code prefix, e.g. "Sh2" or "NGC"; a trailing space is ignored')
 	p_sparql.add_argument("--class", dest="p31", default=None, metavar="QID", help='anchor the scan on a Wikidata class, e.g. Q11282 for H II regions; required for space-separated codes such as "SH 2-"')
 	p_sparql.add_argument("--limit", type=int, default=200)
+	p_sparql.add_argument("--out", default=None, help="write the shortlist as CSV, the input to `audit coords`")
 	p_mast = audit_sub.add_parser("mast", help="MAST observation coverage for a target list")
 	p_mast.add_argument("targets", help="CSV with columns name,ra,dec")
+	p_mast.add_argument("--radius", type=float, default=0.01, help="cone radius in degrees (0.01 = 36 arcsec)")
+
+	p_coords = audit_sub.add_parser(
+		"coords", help="resolve designations to coordinates — the input the MAST check needs"
+	)
+	source = p_coords.add_mutually_exclusive_group(required=True)
+	source.add_argument("--prefix", help="run the Wikidata gap audit for this prefix and resolve it")
+	source.add_argument("--csv", help="designation CSV, e.g. from `audit sparql --out gaps.csv`")
+	p_coords.add_argument("--class", dest="p31", default=None, metavar="QID", help="class anchor, e.g. Q11282 for H II regions")
+	p_coords.add_argument("--limit", type=int, default=200)
+	p_coords.add_argument("--out", default="-", help="target CSV to write, '-' for stdout")
+	p_coords.add_argument("--no-aliases", action="store_true", help="do not retry unresolved names with their cross-identifications")
 
 	args = parser.parse_args(argv)
 	if args.cmd == "state":
@@ -85,7 +100,7 @@ def cmd_verify(args):
 
 def cmd_audit(args):
 	if args.audit_cmd == "sparql":
-		from .audit.sparql import missing_p18
+		from .audit.sparql import missing_p18, write_gaps
 
 		rows, total = missing_p18(args.prefix, limit=args.limit, p31=args.p31)
 		shown = f" (showing {len(rows)})" if len(rows) < total else ""
@@ -93,13 +108,46 @@ def cmd_audit(args):
 		print(f"{total} entries{scope} with a code starting '{args.prefix.strip()}' have no P18 image{shown}:")
 		for row in rows:
 			print(f"  {format_row(row)}")
+		if args.out:
+			write_gaps(rows, args.out)
+			print(f"wrote {args.out}", file=sys.stderr)
 		return 0
 	if args.audit_cmd == "mast":
 		from .audit.mast import coverage
-		table = coverage(args.targets)
+		table = coverage(args.targets, radius_deg=args.radius)
 		print(table)
+		skipped = table.meta["skipped_without_coords"]
+		if skipped:
+			print(f"{skipped} target(s) had no coordinates and were skipped — resolve them first (`audit coords`)")
 		return 0
+	if args.audit_cmd == "coords":
+		return cmd_coords(args)
 	return 1
+
+
+def cmd_coords(args):
+	"""Designations -> coordinates -> the target CSV that `audit mast` reads."""
+	from .audit import coords
+
+	if args.csv:
+		rows = coords.resolve_csv(args.csv, use_aliases=not args.no_aliases)
+		total = len(rows)
+	else:
+		rows, total = coords.resolve_gaps(args.prefix, p31=args.p31, limit=args.limit,
+			use_aliases=not args.no_aliases)
+	shown = f" (shortlist of {len(rows)} of {total})" if len(rows) < total else ""
+	print(f"{total} gap designations{shown}, resolved {sum(row['ra'] is not None for row in rows)}:", file=sys.stderr)
+	for row in rows:
+		if row["ra"] is not None:
+			print(f"  {row['name']}  {row['ra']:.5f} {row['dec']:+.5f}  {row['otype'] or '?'}  {row['object']}  via {row['via']}", file=sys.stderr)
+	missing = [row["name"] for row in rows if row["ra"] is None]
+	if missing:
+		print(f"unresolved ({len(missing)}): {', '.join(missing)}", file=sys.stderr)
+
+	coords.write_targets(rows, args.out)
+	if args.out != "-":
+		print(f"wrote {args.out}", file=sys.stderr)
+	return 0
 
 
 def format_row(row):

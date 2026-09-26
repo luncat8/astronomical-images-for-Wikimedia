@@ -34,6 +34,7 @@ Example
 
 import tomllib
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 
 import numpy as np
@@ -90,7 +91,14 @@ def load_config(path) -> RunConfig:
 	post = raw.get("post", {})
 	cd = float(post.get("chroma_denoise", 0.0))
 	_expect(0.0 <= cd <= 1.0, "post.chroma_denoise must be 0..1")
+	# Relative to the config file, like every input path: resolving it against the shell's
+	# working directory instead sent a run's whole output tree outside the project, because the
+	# process happened to be started from the repository root.
 	out_dir = Path(post.get("dir", run.get("name", "run")))
+	if not out_dir.is_absolute():
+		# normpath, not resolve: it collapses ".." so the log and params.json carry a readable
+		# path, without following symlinks into a name the user never typed.
+		out_dir = Path(os.path.normpath(path.parent / out_dir))
 
 	return RunConfig(
 		name=run.get("name", path.stem),
@@ -113,15 +121,16 @@ def load_config(path) -> RunConfig:
 def build_stretch_params(cfg: RunConfig, linear_rgb):
 	"""Explicit values from the config, or auto — either way the numbers are frozen
 	into the log, so a reviewer sees exactly what was applied."""
-	if cfg.stretch_cfg:
-		values = dict(
-			shadow_clip=0.0, high_point=1.0, strength=10.0,
-			background_level=cfg.background_level,
-		)
-		values.update({k: float(v) for k, v in cfg.stretch_cfg.items()})
-		values["background_level"] = cfg.background_level
-		return StretchParams(**values)
-	return auto_params(linear_rgb, background_level=cfg.background_level)
+	chosen = {k: float(v) for k, v in (cfg.stretch_cfg or {}).items()}
+	# Per key, not per section: a [stretch] block that only sets the background level must not
+	# silently ship shadow_clip=0 and high_point=1 in linear units. Those defaults are 0 and 1
+	# *pixels*, and on a real product in electrons/s they compress the object into the top
+	# octave of the display range (measured 2026-09-26 on WFC3/IR data), with nothing in the
+	# log saying the numbers were never chosen.
+	auto = auto_params(linear_rgb, background_level=cfg.background_level)
+	values = {key: chosen.get(key, getattr(auto, key)) for key in
+		("shadow_clip", "high_point", "strength", "background_level")}
+	return StretchParams(**values)
 
 
 def build_mapping(cfg: RunConfig, channels) -> ColourMapping:

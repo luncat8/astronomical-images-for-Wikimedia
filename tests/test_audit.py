@@ -1,5 +1,4 @@
 import pytest
-import requests
 
 from astroproc.audit import sparql
 from astroproc.audit.score import RUBRIC, Score, render_dossier
@@ -108,80 +107,6 @@ def test_class_candidate_ids_uses_count_and_ordered_ids(monkeypatch):
 	monkeypatch.setattr(sparql, "_sparql", fake_sparql)
 	ids, total = sparql.candidate_ids("SH 2-", limit=5, p31="Q11282")
 	assert total == 273 and ids == ["Q42"]
-
-
-class StubResponse:
-	def __init__(self, status_code=200, headers=None):
-		self.status_code = status_code
-		self.headers = headers or {}
-
-	def json(self):
-		return {"ok": True}
-
-	def raise_for_status(self):
-		if self.status_code >= 400:
-			raise requests.HTTPError(f"{self.status_code}", response=self)
-
-
-def test_request_retries_a_read_timeout(monkeypatch):
-	"""A twelve-call audit lost two calls to a plain read timeout; one retry is the fix."""
-	calls = []
-
-	class FlakySession:
-		def request(self, method, url, **kwargs):
-			calls.append((method, url))
-			if len(calls) == 1:
-				raise requests.ReadTimeout("slow")
-			return StubResponse()
-
-	monkeypatch.setattr(sparql, "_http", FlakySession())
-	assert sparql._request("GET", sparql.API, timeout=1).json() == {"ok": True}
-	assert len(calls) == 2
-	assert calls[0] == calls[1], "the retry repeats the same call"
-
-
-def test_request_gives_up_after_the_last_attempt(monkeypatch):
-	calls = []
-
-	class DeadSession:
-		def request(self, method, url, **kwargs):
-			calls.append(url)
-			raise requests.ReadTimeout("slow")
-
-	monkeypatch.setattr(sparql, "_http", DeadSession())
-	with pytest.raises(requests.ReadTimeout):
-		sparql._request("GET", sparql.API, timeout=1)
-	assert len(calls) == 3
-
-
-def test_request_waits_out_a_rate_limit(monkeypatch):
-	"""A shortlist was killed by an anonymous 429; the API names the wait in Retry-After."""
-	slept = []
-	responses = [StubResponse(429, {"Retry-After": "2"}), StubResponse()]
-
-	class ThrottledSession:
-		def request(self, method, url, **kwargs):
-			return responses.pop(0)
-
-	monkeypatch.setattr(sparql, "_http", ThrottledSession())
-	monkeypatch.setattr(sparql.time, "sleep", slept.append)
-	assert sparql._request("GET", sparql.API, timeout=1).json() == {"ok": True}
-	assert slept == [2.0]
-
-
-def test_request_does_not_retry_a_server_side_timeout(monkeypatch):
-	"""504 means the query was too slow; retrying spends the WDQS budget twice for nothing."""
-	calls = []
-
-	class SlowQuerySession:
-		def request(self, method, url, **kwargs):
-			calls.append(url)
-			return StubResponse(504)
-
-	monkeypatch.setattr(sparql, "_http", SlowQuerySession())
-	with pytest.raises(requests.HTTPError):
-		sparql._request("POST", sparql.ENDPOINT, timeout=1)
-	assert len(calls) == 1
 
 
 def test_candidate_ids_stops_at_limit(monkeypatch):

@@ -58,6 +58,13 @@ def orientation_report(wcs, shape):
 def detect_stars(linear_rgb, sat_mask=None, n_stars=64, sigma=5.0):
 	"""Top-N unsaturated stars with per-channel aperture fluxes (3x3, sky already subtracted).
 
+	A star whose aperture overlaps blank (non-finite) coverage is dropped rather than
+	zero-filled: a filled aperture invents a dark measurement, and one NaN star is enough to
+	make the whole R/B report NaN, which is what the first real drizzle product did
+	(2026-09-26: "R/B median nan, IQR nan" on a perfectly ordinary frame with 1.2 % blank
+	coverage at the edge). `NaN > sky` is already False, so the candidates are clean; it is the
+	aperture that reaches into the blank.
+
 	Returns (coords (n, 2) as (row, col), fluxes (n, 3)).
 	"""
 	total = linear_rgb.sum(axis=0)
@@ -78,13 +85,17 @@ def detect_stars(linear_rgb, sat_mask=None, n_stars=64, sigma=5.0):
 	for c in range(linear_rgb.shape[0]):
 		plane = linear_rgb[c]
 		acc = np.zeros(rows.size)
+		blank = np.zeros(rows.size, dtype=bool)
 		for dr in (-1, 0, 1):
 			for dc in (-1, 0, 1):
 				rr = np.clip(rows + dr, 0, h - 1)
 				cc = np.clip(cols + dc, 0, w - 1)
-				acc += plane[rr, cc]
+				block = plane[rr, cc]
+				acc += np.where(np.isfinite(block), block, 0.0)
+				blank |= ~np.isfinite(block)
 		fluxes[:, c] = acc
-	return np.stack([rows, cols], axis=1), fluxes
+	keep = ~blank
+	return np.stack([rows[keep], cols[keep]], axis=1), fluxes[keep]
 
 
 def star_colour_report(fluxes, blue_r_max=0.85, red_r_min=1.25, min_fraction=0.08):
