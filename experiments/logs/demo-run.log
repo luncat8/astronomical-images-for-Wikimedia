@@ -1,0 +1,56 @@
+# Processing log — demo-sho-synthetic
+Software + versions: astroproc 0.1.0; python 3.11.2; numpy 2.4.6, astropy 8.0.1, scipy 1.17.1
+Date processed:      2026-09-26T14:30:30+00:00
+Operator:            <TODO: your name>
+
+ 1. Source data (archive/own, ID, retrieval date, licence)
+    SII: /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-fits/DEMO-NGC7000_SII.fits [DATE-OBS=2026-01-15T03:24:00, EXPTIME=1200.0, FILTER=SII, INSTRUME=SYNTH-CAM, SATURATE=60000.0, TELESCOP=SYNTH-SCOPE]; licence <TODO: record verbatim per plan §4.2>; Halpha: /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-fits/DEMO-NGC7000_Halpha.fits [DATE-OBS=2026-01-15T03:24:00, EXPTIME=1200.0, FILTER=Halpha, INSTRUME=SYNTH-CAM, SATURATE=60000.0, TELESCOP=SYNTH-SCOPE]; licence <TODO: record verbatim per plan §4.2>; OIII: /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-fits/DEMO-NGC7000_OIII.fits [DATE-OBS=2026-01-15T03:24:00, EXPTIME=1200.0, FILTER=OIII, INSTRUME=SYNTH-CAM, SATURATE=60000.0, TELESCOP=SYNTH-SCOPE]; licence <TODO: record verbatim per plan §4.2>
+ 2. Calibration applied (or: data already calibrated)
+    archive data assumed calibrated - no own calibration applied (plan §7.2)
+ 3. State check: linear / already-stretched / composited / mosaic -> action taken
+    all inputs linear (histogram core fraction: SII 0.9327, Halpha 0.9234, OIII 0.9305)
+ 4. Registration + integration (method, dither, alignment)
+    max offsets vs 'Halpha': SII 0.000 px, Halpha 0.000 px, OIII 0.000 px - all within tolerance, no resampling
+ 5. Linearisation (required? method, params)
+    not required - inputs verified linear
+ 6. Background subtraction + channel normalisation (method, values)
+    {anchor: Halpha, sky_before: {SII: 105.17232513427734, Halpha: 120.14585876464844, OIII: 90.15884399414062}, gains (sky match x throughput): {SII: 1.1423714233877955, Halpha: 1.0, OIII: 1.3326020326132026}, throughput: {}, note: }
+ 7. Colour calibration (method, reference, result)
+    sky-matched channels; throughput none; photometric star-colour calibration not applied - judge by step 13, add factors to [normalise] if stars read off
+ 8. Saturated-pixel handling
+    limit 60000.0; masked 5 px
+ 9. Colour mapping (exact channel -> colour, incl. any non-linear mapping)
+    sho_transferred: SII->R1/G0.15/B0; Halpha->R0.55/G1/B0(gamma 0.95); OIII->R0/G0.35/B1(gamma 0.9) [sensitivity transfer; Halpha mixed toward green, SII toward red]
+10. Stretch (function, shadow clip, iterations, shared across channels: yes/no)
+    asinh shared across channels: shadow_clip=2.98805, high_point=6856.41, strength=10, background_level=0.03; background shift +0.0300
+11. Background level set to
+    0.03 (display space 0..1)
+12. Reference check: survey image for orientation (URL); rotation applied
+    north +0.0 deg from up, east -90.0 deg from up, normal; rotate -0.0 deg for N-up
+13. Star colour check: reference used; result
+    survey reference <TODO: attach PS1/SDSS cutout>; R/B median 2.91, IQR 1.29, blue 0% / red 100% of stars -> SUSPECT: star colour collapsed. narrowband mappings collapse star colour by design - blend broadband RGB into the stars or accept the flag (plan §7.6)
+14. Star reduction / denoise (methods, strengths)
+    chroma-only denoise strength 0.3; no star reduction
+15. Chromatic aberration correction
+    median (R+B)/2-G excess on edges 0.0252 (ok)
+16. HDR / exposure blending (if used)
+    low-lift blend (SC 5.9761) into saturated cores, feathered
+17. Gradients, sharpening, saturation
+    saturation factor 1.05; no gradient/sharpening applied
+18. Output colour space, bit depth, banding check
+    sRGB (ICC embedded), 8-bit PNG; banding: banding amplitude 0.01 8-bit levels (ok)
+19. Data version exported (path) — presentation version exported (path)
+    data: /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-sho/data-linear.fits + /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-sho/data-version-16bit.tif; presentation: /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-sho/presentation.png; log: processing-log.txt + params.json in /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-sho
+20. Archive path for FITS + project files
+    <TODO: archive FITS + project files location>
+21. Licence tag chosen, with the plan §4.3 reasoning
+    <TODO: licence tag per plan §4.3, with reasoning>
+
+
+notes:
+ - SII: linear (core 0.9327)
+ - Halpha: linear (core 0.9234)
+ - OIII: linear (core 0.9305)
+ - star colour: R/B median 2.91, IQR 1.29, blue 0% / red 100% of stars -> SUSPECT: star colour collapsed narrowband mappings collapse star colour by design - blend broadband RGB into the stars or accept the flag (plan §7.6)
+
+outputs in /home/user/astronomical-images-for-Wikimedia/experiments/out/demo-sho

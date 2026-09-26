@@ -1,0 +1,20 @@
+input: (3, 4096, 4096) float32 (201 MB)
+stretch wall time: 5255 ms
+throughput: 10 Mpixel/s
+peak traced allocation beyond input: 733 MB (one float32 scratch of 201 MB is expected)
+background shift applied: +0.0300
+output dtype: float32, range [0.0300, 1.0000]
+
+input: (3, 4096, 4096) float32 (201 MB)
+stretch wall time: 439 ms
+throughput: 115 Mpixel/s
+peak traced allocation beyond input: 236 MB (one float32 scratch of 201 MB is expected)
+background shift applied: +0.0300
+output dtype: float32, range [0.0300, 1.0000]
+
+input: (3, 4096, 4096) float32 (201 MB)
+stretch wall time: 439 ms
+throughput: 115 Mpixel/s
+peak traced allocation beyond input: 236 MB (one float32 scratch of 201 MB is expected)
+background shift applied: +0.0300
+output dtype: float32, range [0.0300, 1.0000]

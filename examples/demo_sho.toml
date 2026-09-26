@@ -1,0 +1,36 @@
+# Example run: 3-filter narrowband (SHO) with a sensitivity-transfer mapping.
+# Adjust input paths, then: astroproc process examples/demo_sho.toml
+
+[run]
+name = "demo-sho"
+
+[inputs]                     # channel name -> FITS path (relative to this file)
+SII    = "fits/object_SII.fits"
+Halpha = "fits/object_Halpha.fits"
+OIII   = "fits/object_OIII.fits"
+
+[mapping]
+preset = "sho_transferred"   # or "sho_split", "hoo", "rgb", "dual_synthesis",
+                             # "grayscale", "spectral_<n>", or explicit weights:
+                             # explicit = [["Halpha", [1.0, 0.38, 0.0]], ["OIII", [0.0, 0.62, 1.0]]]
+                             # gamma = [1.0, 0.95, 0.9]
+
+[normalise]
+anchor = "Halpha"            # default: first input
+throughput = { OIII = 0.85, SII = 0.9 }   # optional filter-throughput factors
+# sat_limit = 60000.0        # optional; header SATURATE is the fallback
+
+# Omit [stretch] entirely to let auto_params decide — the chosen numbers are
+# still frozen into the log, which is what reproducibility needs.
+[stretch]
+shadow_clip = 0.012          # linear units, just above sky: sets how much faint signal lifts
+high_point = 3.5             # linear units, asymptotic white reference
+strength = 10.0              # asinh softening
+background_level = 0.03      # display-space sky target (0..1)
+
+[post]
+chroma_denoise = 0.3         # 0..1, chroma-only median blend
+saturation = 1.05            # >1 risks the oversaturation defect (plan §10)
+hdr_cores = true             # blend a low-lift stretch into saturated cores
+jpeg = false                 # extra full-res JPEG next to the PNG
+dir = "out/demo-sho"         # output directory (default: run name)

@@ -27,6 +27,8 @@ are dated because they drift; §15 lists what to re-read before the first upload
    presentation version (§3.2) — answer the faithfulness objection before it is raised.
 8. **Do not compete with the mission press offices** for the famous ~200 objects (§6.6), and if you
    want to start producing today, §14.1 is the smallest viable first upload.
+9. **§16 is the reference implementation** of the pipeline as a scripted, config-driven chain —
+   the reproducibility claim (§7.9) is backed by running code, not intent.
 
 ---
 
@@ -587,16 +589,17 @@ Take these in order; each changes the work that follows. None is resolved by thi
 
 1. **D1 — own telescope, ground-based catalogue sweep, or space-archive data.** Determines the
    rights strategy, the equipment, the target list and the competitive framing (§6.6).
-2. **D3 — is a reproducible scripted chain a requirement or a nicety?** If a requirement, the
-   GUI-first path contradicts the project's own justification (§7.9).
+2. **D3 — is a reproducible scripted chain a requirement or a nicety?** *Resolved as a
+   requirement:* §16 is that chain; GUI tools remain optional companions, never the record.
 3. **D2 — is a multi-palette set the first deliverable or a later one?** It decides whether the risk
    profile starts high or is built up (§10).
 4. **Own data vs. archive data.** Archive-only is faster and cleaner on rights; own data is the
    stronger long-term position and the easiest provenance story.
 5. **Is a beginner-facing summary a required deliverable?** Entry point 0.C is not served by a
    document written at this level.
-6. **Is the batch (SPARQL) coverage audit step one?** If adopted, the shortlist is *generated*, not
-   hand-picked, and the §6.5 rubric scores its output.
+6. **Is the batch (SPARQL) coverage audit step one?** *Resolved yes:* the shortlist should be
+   *generated*, not hand-picked — `astroproc audit` (§16.1) runs the query and the §6.5 rubric
+   scores its output.
 7. **Object class, geography, time budget per image.** Realistic figures: 10–20 h for a first
    archive-data narrowband composite done properly, more for mosaics and HDR. Emission nebulae are
    the most forgiving and have the largest coverage gap; galaxies give the most scientific value per
@@ -696,3 +699,67 @@ before any promotion attempt:
 - Data-access policies: ESO, NOIRLab, MAST/Hubble, any survey cutout service used, and
   `archive.stsci.edu/dss/copyright.html` — plus the copyright line in each FITS header
 - The article categories and templates in use at upload time
+
+---
+
+## 16. Reference implementation
+
+`src/astroproc/` (Python ≥ 3.11; numpy, astropy, scipy, pillow, tifffile, requests, astroquery)
+is a dependency-light embodiment of §7 — the resolution of D3 and D6. This section is
+self-contained so a fork can reimplement without reading the code.
+
+### 16.1 Modules and the plan sections they encode
+
+| Module | Plan | Responsibility |
+|---|---|---|
+| `state.py` | §7.1 | linear/stretched verdict: sigma-clipped sky median as a fraction of the p0.1–p99.9 span (> 2 % stretched, > 0.5 % ambiguous); `SATURATE` mask; header provenance; `state` CLI |
+| `align.py` | §7.4 precondition | WCS probe of inter-channel offsets; bilinear resample onto the reference grid beyond 0.1 px; no-WCS channels passed through and flagged |
+| `background.py` | §7.3 | per-channel sky subtraction; sky-match gains against the anchor channel; optional filter-throughput factors applied on top and recorded separately |
+| `mapping.py` | §5, §7.4 | `ColourMapping` = per-channel RGB weights + optional per-channel gamma (fractional powers floor at 0); presets `rgb`, `sho_split`, `sho_transferred`, `hoo`, `dual_synthesis`, `grayscale`, `spectral_N`; `describe()` emits the exact mapping string for the log and file description |
+| `stretch.py` | §7.5 | one shared asinh: `y = asinh(u·s)/asinh(s)`, `u = (x−SC)/(HP−SC)`; auto SC = sky + 0.7σ, HP = p99.9 of luminance; background re-levelled to a recorded target using a strided sky sample |
+| `verify.py` | §7.6 | N/E angles and handedness from WCS tangent-plane offsets (a mirrored frame is an immediate reject); star detection excluding saturated pixels; star-colour plausibility from per-channel aperture flux R/B ratios |
+| `post.py` | §7.7–7.8 | chroma-only denoise (Rec.709 Y/Cb/Cr, G recovered exactly), saturation around luma, HDR core blend from a low-lift stretch, banding metric (row/col medians, star cores excluded, smooth trend removed) and CA metric ((R+B)/2 − G excess on edges) |
+| `export.py` | §3.2, §7.8 | data-linear.fits (float32 cube + `MAPPING`/`STRETCH`/`PROVn` cards), 16-bit TIFF master, 8-bit sRGB PNG/JPEG with embedded ICC profile |
+| `session.py` | §13.2 | fills the 21-line log template *while* the pipeline runs, plus machine-readable `params.json`; human-only fields remain visible `<TODO>` markers |
+| `config.py` | D3 | TOML run contract (see 16.2); validates channels, anchor, throughput, stretch keys, post ranges |
+| `pipeline.py` | §7 | enforces the order, refuses already-stretched inputs, saturation-masks before the stretch, assigns colour before the stretch, forks the two outputs after it |
+| `cli.py` | — | `state` / `process` / `verify` / `audit` |
+| `audit/sparql.py` | §6.2, 0.B | Wikidata P18 batch audit (fetch separated from parse; brace-escaped query) |
+| `audit/mast.py` | §6.3 | observation coverage for an uploaded target list (CSV: name,ra,dec); DRZ/DRC/CAL/I2D product fetch |
+| `audit/score.py` | §6.5, §13.1 | 10-row rubric with hard gates on rows 1–2, dossier renderer |
+
+### 16.2 The run contract
+
+A run is fully described by a TOML file — inputs (channel → FITS path), mapping (preset or
+explicit weights/gamma), normalise (anchor, throughput, sat_limit), stretch (SC/HP/strength/
+background, or omitted for auto — the chosen numbers are recorded either way) and post
+(chroma_denoise, saturation, hdr_cores, jpeg, dir). Outputs, all in the run directory:
+
+```
+data-linear.fits        the §3.2 data version, linear, self-describing headers
+data-version-16bit.tif  the shared stretch, no presentation post
+presentation.png        8-bit sRGB + ICC, the §7.7 presentation version
+processing-log.txt      the §13.2 log, auto-filled
+params.json             the same record, machine-readable
+```
+
+### 16.3 Invariants any reimplementation must keep
+
+1. The §7 order is enforced, not advisory: colour is assigned before the stretch, and exactly one
+   stretch with one parameter set touches all channels.
+2. Already-stretched input is refused with an explanation, never silently composited.
+3. Saturation in any channel masks the pixel from the stretch and from star selection.
+4. Two outputs, forked at the stretch; the presentation post never feeds back.
+5. Every number the code chose automatically is still written down — auto is not anonymous.
+6. Narrowband runs flag collapsed star colour as expected-by-design instead of hiding it.
+
+### 16.4 Validation
+
+`tests/` builds a synthetic scene with planted ground truth — star colour classes
+(blue/white/red), per-channel sky levels and throughput factors, one deliberately saturated star,
+TAN WCS — and asserts, end to end, that planted blue/white/red stars read blue/white/red after the
+full pipeline (sampled in the star wings: cores sit on the stretch asymptote), that mirrored and
+rotated WCS is detected, that stretched input is refused, that the log is complete, and that a
+white patch stays white after sky-match gains. `experiments/demo_run.py` produces a demo SHO
+composite plus its log; `experiments/stretch_perf.py` measures the hot path (~115 Mpixel/s at 4k²,
+one float32 scratch buffer).
