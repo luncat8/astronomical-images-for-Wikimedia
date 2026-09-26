@@ -5,8 +5,50 @@ Notes for LLM agents working in this repo. Reusable lessons only; implementation
 ## Sandbox / environment
 
 - Only pypi.org is reliably reachable; Wikimedia, SIMBAD, MAST, PS1 and other astronomy endpoints are blocked at network level. Build network-touching code against the real APIs but keep I/O isolated at module edges (e.g. `audit/sparql.py` separates `missing_p18` from `parse_response`), and validate logic offline with synthetic data.
+- **That snapshot was wrong, and it flipped mid-session (2026-09-26):** query.wikidata.org, www.wikidata.org, mast.stsci.edu and heasarc became reachable while SIMBAD and ps1.stsci.edu stayed blocked, and even pypi timed out on the first attempt and worked on the second. Test connectivity per host, do not assume a uniform sandbox, and re-test before declaring a run impossible.
+- `python3 -m venv .venv` **fails on this filesystem**: `Operation not permitted: 'lib' -> '.venv/lib64'`
+  (the lib64 symlink), and `--copies` does not help. Create the venv outside the repo
+  (`python3 -m venv /tmp/kilo/astrovenv`) and run `pytest` from the repo root — `pyproject.toml`
+  already sets `pythonpath = ["tests", "src"]`, so no editable install is needed.
 - `.venv/` in the repo root is excluded from session snapshots. Recreate with `python3 -m venv .venv && .venv/bin/pip install -e .[dev]` after resuming; keep `pyproject.toml` authoritative.
 - `git push` may fail with "Invalid username or token" — expected, user applies manually (AGENTS.md).
+
+## Wikidata at scale (measured 2026-09-26)
+
+- **`FILTER(STRSTARTS(?cat, ...))` over `wdt:P528` does not scale.** 41 402 NGC entries → HTTP 504
+  after the 60 s WDQS budget. `haswbstatement:P528=NGC*` (Action API search index) answers the same
+  question in ~1–4 s, and `-haswbstatement:P18` puts the image test in the same indexed request.
+  The anchor that makes SPARQL work again is `?item wdt:P31 wd:Q…` — restrict to one class first,
+  then filter its string values (4–12 s).
+- **A CirrusSearch wildcard binds to the last token only.** `Sh2*` works; `SH 2*` and `NGC 1*`
+  return 0 hits, and `Sh2 *` (trailing space) returns 0 too — strip prefixes before building the
+  search. Consequence: space-separated catalogue codes are invisible to the index and need the
+  class-anchored path.
+- **Token matching also over-matches.** The prefix `SH` returns Shk, SHOC, SHADES, SHARDS, SHBL
+  and SHJ objects (12 739 hits) alongside the ~310 Sharpless entries. Compare the first *token* of
+  the code with the prefix, not leading characters.
+- **`SERVICE wikibase:label` with `wikibase:language "en"` returns the bare Q-id** for catalogue
+  stubs that only have a `mul` label. Use `"en,mul"`; `?item rdfs:label` with
+  `FILTER(LANG(?label) IN ("en","mul"))` also works.
+- **One Wikidata item has one row per designation** (NGC 6334 carries 11 P528 values), so a naive
+  parse reports the same object 11 times. Group by item and keep the other codes as the alias list —
+  which is exactly the cross-identification set §6.2 needs.
+- **Catalogue stubs have no coordinates at all**: 0 of 327 Sharpless and 0 of 173 RCW entries carry
+  P625. Wikidata is a *designation* source for this workflow, not a coordinate source; a name
+  resolver is a prerequisite for the §6.3 MAST cross-check.
+- Count with `COUNT(?item)` *inside* an `OPTIONAL` and you count solution rows, not items with the
+  optional binding — bind the optional and count that variable, or use `COUNT(DISTINCT ?item)`.
+- `list=search` refuses `sroffset` past 10 000, so a prefix with more gaps than that needs
+  partitioning — and partitioning only works on a single-token prefix, since you append one
+  character to it.
+- **Both endpoints are flaky, and the failures are different in kind.** A read timeout or a
+  connection error is worth retrying; an anonymous `429` says how long to wait in its `Retry-After`
+  header; a WDQS `504` means *your query* was too slow, and retrying spends the budget twice for
+  nothing. Only a live run shows this — a twelve-call audit lost two counts and then a shortlist.
+- `astroquery.mast` works against the live service from a plain `python3 -m astroproc.cli audit
+  mast targets.csv` (M31: 15 observations, TESS g,i,r,y,z). The MAST host answers even when
+  SIMBAD and PS1 are blocked, so a partial network still supports the §6.3 check — if the target
+  list has coordinates.
 
 ## Editing files in this agent environment
 
@@ -29,7 +71,21 @@ Notes for LLM agents working in this repo. Reusable lessons only; implementation
 
 ## Strings / formats
 
-- SPARQL queries built with `str.format` need every literal brace escaped (`{{ }}`) — SPARQL is brace-dense, so consider `string.Template` or replacement next time.
+- SPARQL queries built with `str.format` need every literal brace escaped (`{{ }}`) — SPARQL is brace-dense, so consider `string.Template` or replacement next time. Building a query from *concatenated* fragments (a shared `CLASS_TAIL`) and formatting only the values keeps the escaping to one place.
+
+## Python structure
+
+- A CLI that imports the heavy pipeline at module level cannot run its light subcommands on a
+  machine without the heavy dependencies: `astroproc audit sparql` needs only `requests`, but the
+  astropy-importing `pipeline` was pulled in by the same top-level import. Import inside the
+  command that needs it.
+- Recursion over a remote API needs an explicit depth bound even when the data "cannot" loop — one
+  stubbed `totalhits` that contradicted its own parts turned prefix partitioning into a
+  `RecursionError`, and a test that fakes an endpoint should fake it *impossibly* to catch that.
+- A guard is only a guard if it is anchored to the data model, and it must not be *stricter* than
+  the source it filters: requiring the first token to equal the prefix looked tidy and silently
+  emptied a real shortlist (`--prefix Coll` → 4 rows became 0, because the tokens are "Collinder").
+  Reproduce the endpoint's matching semantics and let over-matching stay visible in the output.
 
 ## Testing pipeline code
 

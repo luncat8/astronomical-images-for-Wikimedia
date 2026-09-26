@@ -28,7 +28,8 @@ are dated because they drift; §15 lists what to re-read before the first upload
 8. **Do not compete with the mission press offices** for the famous ~200 objects (§6.6), and if you
    want to start producing today, §14.1 is the smallest viable first upload.
 9. **§16 is the reference implementation** of the pipeline as a scripted, config-driven chain —
-   the reproducibility claim (§7.9) is backed by running code, not intent.
+   the reproducibility claim (§7.9) is backed by running code, not intent. Its coverage audit
+   (`astroproc audit sparql`) is documented against live Wikidata behaviour in §6.2.1.
 
 ---
 
@@ -49,23 +50,33 @@ the highest-value contribution is a **better** one, not a second one; prefer a m
 well-scaled object over a famous one. If nothing exists: confirm usable data (§6.3), confirm
 licence (§4), process. A single filter is not a failure — it is a grayscale upload (§5).
 
-**0.B — "I have a catalogue object and want to check and act."** Do it as a **batch**. Wikidata
-SPARQL finds catalogue entries with no image at all:
+**0.B — "I have a catalogue object and want to check and act."** Do it as a **batch**, but not with
+the query below — it does not survive contact with the live service (measured 2026-09-26,
+§6.2.1). The working form is the search index, with a class-anchored SPARQL scan as the fallback
+for space-separated codes:
 
 ```sparql
-SELECT ?item ?itemLabel WHERE {
-  ?item wdt:P528 ?cat .            # catalogue code
-  FILTER(STRSTARTS(?cat, "NGC "))
+# search index, one request, image test included: 41 402 NGC entries in ~4 s
+haswbstatement:P528=NGC* -haswbstatement:P18
+```
+
+```sparql
+# space-separated codes ("SH 2-104"): anchor on the object class, then filter
+SELECT DISTINCT ?item WHERE {
+  ?item wdt:P31 wd:Q11282 .            # index-backed; an unanchored scan times out
+  ?item wdt:P528 ?cat .
+  FILTER(STRSTARTS(?cat, "SH 2-"))
   FILTER NOT EXISTS { ?item wdt:P18 ?img }
-}
-LIMIT 500
+} ORDER BY ?cat LIMIT 200
 ```
 
 Cross-check the resulting coordinates against MAST / ESASky for actual imaging coverage — MAST
 accepts an uploaded target list, which turns this into a to-do list of *objects that have data but
-no picture*. Triage with SkyView or a PS1 cutout first to discard single stars, duplicates and
-asterisms. Score the survivors (§6.5) and commit to 5–10 targets. Processing 300 candidates is the
-classic failure mode.
+no picture*. **Coordinates are the missing link, not the image test:** 0 of 327 Sharpless entries
+and 0 of 173 RCW entries in Wikidata carry P625, so §6.3 needs a name resolver (SIMBAD, VizieR,
+HEASarc) before any target list can be built. Triage with SkyView or a PS1 cutout first to discard
+single stars, duplicates and asterisms. Score the survivors (§6.5) and commit to 5–10 targets.
+Processing 300 candidates is the classic failure mode.
 
 **0.C — "I just want to produce something new."** Two different games; choose deliberately.
 *Learn the chain safely* (recommended first): take a famous object that already has an excellent
@@ -262,14 +273,45 @@ with Hubble/ESO/JWST press images. The underserved population is the long tail.
 
 Choose a catalogue by target type: Sharpless 2 (~310), RCW, Collinder, van den Bergh for HII
 regions; NGC (~7840) and IC (~5400) for planetary nebulae and clusters; Abell, UGC, PGC, LEDA for
-galaxies; Caldwell (a subset — skip the famous ones). **Batch the P18 check with SPARQL** (§1, 0.B)
-rather than object by object, and **cross-identify before concluding anything** — SIMBAD, NED and
+galaxies; Caldwell (a subset — skip the famous ones). **Batch the P18 check** (§1, 0.B) rather
+than object by object, and **cross-identify before concluding anything** — SIMBAD, NED and
 VizieR give the alias set, and a gap found under one designation may be covered under another. Then
 per survivor: the English Wikipedia lead/infobox image (also non-English Wikipedias — a gap there is
 still an opportunity), the Commons category for the designation (frequently incomplete, and it hides
 files), and Commons full-text search on the designation *and* every alias. Classify the gap and
 score it. Many NGC/IC "objects" are worthless — single stars, asterisms, duplicates, extremely faint
 — so filter by size and brightness against a survey image early.
+
+#### 6.2.1 How the batch audit actually behaves (measured live 2026-09-26)
+
+`astroproc audit sparql` measures, and these numbers are the reason the plan's first draft of the
+query was wrong. Gaps = catalogue entries with no P18 image:
+
+| Catalogue | Gaps | Enumeration path | Note |
+|---|---|---|---|
+| Sharpless 2 | **274** | 273 anchored (`SH 2-`) + 1 anchored (`Sh2`) | 3 through the index alone: the index sees only the hyphenated spelling |
+| RCW | 176 | index | 220 RCW entries exist, so 80 % are unillustrated |
+| Collinder | 4 (3 real) | index | `Coll*` also returns "Collezione Ansaldi B 905"; 90 of 94 entries already have an image — a saturated catalogue |
+| Abell | 8 | index | only 13 Abell entries exist in Wikidata at all |
+| NGC | 33 478 | index | 41 402 entries, so ~19 % illustrated |
+| IC | 6 179 | index | 9 783 entries |
+| UGC / PGC | 12 348 / 13 064 | index | |
+
+Three consequences for the method:
+
+1. **A prefix scan over `wdt:P528` is not available.** 41 402 NGC entries exceed the 60 s WDQS
+   budget and answer 504. Anchor on `wdt:P31` (one class) and the same filter takes 4–12 s.
+2. **Designations are spelled inconsistently** — the same catalogue appears as `Sh2-29`, `SH2-8`
+   and `SH 2-104`. The search index matches case-insensitively but binds its wildcard to the last
+   token, so a space-separated code is unreachable through it, and a prefix as short as `SH` also
+   matches Shk, SHOC, SHARDS and SHBL objects. Sharpless gaps split 273/1 between the two paths.
+   The audit therefore repeats the index's own token semantics rather than tightening them, and
+   prints the designation of every row: a stricter filter is a silent one (`--prefix Coll` returns
+   four rows, one of them a false positive; `--prefix Collinder` returns the three real ones).
+3. **Wikidata catalogue stubs have no coordinates.** 0 of 327 Sharpless and 0 of 173 RCW entries
+   carry P625. The audit therefore returns designations and alias sets — the *inputs* to §6.3 — and
+   a name resolver (SIMBAD, VizieR, HEASarc) is a prerequisite for the MAST cross-check, not an
+   optional extra.
 
 ### 6.3 Method 2 — data-archive-first (most scalable, most overlooked)
 
@@ -724,7 +766,7 @@ self-contained so a fork can reimplement without reading the code.
 | `config.py` | D3 | TOML run contract (see 16.2); validates channels, anchor, throughput, stretch keys, post ranges |
 | `pipeline.py` | §7 | enforces the order, refuses already-stretched inputs, saturation-masks before the stretch, assigns colour before the stretch, forks the two outputs after it |
 | `cli.py` | — | `state` / `process` / `verify` / `audit` |
-| `audit/sparql.py` | §6.2, 0.B | Wikidata P18 batch audit (fetch separated from parse; brace-escaped query) |
+| `audit/sparql.py` | §6.2, 0.B | Wikidata P18 batch audit: search-index enumeration with a class-anchored SPARQL fallback (§6.2.1), batched detail pass for labels, coordinates and the alias set; fetch separated from parse |
 | `audit/mast.py` | §6.3 | observation coverage for an uploaded target list (CSV: name,ra,dec); DRZ/DRC/CAL/I2D product fetch |
 | `audit/score.py` | §6.5, §13.1 | 10-row rubric with hard gates on rows 1–2, dossier renderer |
 
@@ -762,4 +804,6 @@ full pipeline (sampled in the star wings: cores sit on the stretch asymptote), t
 rotated WCS is detected, that stretched input is refused, that the log is complete, and that a
 white patch stays white after sky-match gains. `experiments/demo_run.py` produces a demo SHO
 composite plus its log; `experiments/stretch_perf.py` measures the hot path (~115 Mpixel/s at 4k²,
-one float32 scratch buffer).
+one float32 scratch buffer). `experiments/live_audit.py` is the network half: it counts the
+Wikidata gaps per catalogue through both enumeration paths and prints shortlists
+(`experiments/logs/live-audit.log`), which is what §6.2.1 records.
