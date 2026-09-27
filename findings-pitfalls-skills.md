@@ -185,3 +185,33 @@ construction; the header then outranks the histogram and the disagreement is wri
 
 - A synthetic scene with planted ground truth (star colour classes, sky levels per channel, throughput factors, one saturated star, TAN WCS) pays for itself many times over: it caught NaN propagation, a no-op metric, a matmul misuse, mirror/rotation bugs, and it doubles as the demo generator.
 - Assert log *completeness* (every template line either filled or visibly `<TODO>`), not just absence of exceptions — the log is a deliverable (plan §7.9, §13.2).
+
+## Coverage audits that join commands (2026-09-27)
+
+- **`wbgetentities` caps `ids` at 50 per request.** One request for a 274-row shortlist answers with
+  the first 50 items and **no error**, which reads exactly like "most gaps are covered". Batch every
+  bulk id list and pin the batch size in a test; the same class of silent truncation applies to any
+  API with a `max` on a comma/pipe-separated parameter.
+- **Compute a derived count where the row is built, not where the CSV is written.** `n_category_files`
+  existed only inside `write_candidates`, so the command that printed its own rows raised `KeyError`
+  on the first one. The CSV writer should only join lists; every field the terminal output reads has
+  to be on the row.
+- **A string that joins two commands belongs in one place.** The verdicts that mean "the archive
+  answered" lived as `ANSWER_VERDICTS` in `commons` and as a literal `"imaged"` in `score`, so the
+  second verdict (`colour_set`) silently stopped counting as coverage. One tuple, imported.
+- **An empty field is not a default worth inventing.** A blank `rights` column must leave the licence
+  gate unscored rather than pass it; a set with no release date must stay a candidate rather than be
+  filtered as old. Say "unknown" and let the operator see it.
+- **Gate a candidate's evidence on the test that produced it.** A pointing that misses the object by
+  3.84' still has a filter, a frame size and an observation id, and filling the dossier with them
+  makes an empty field look like data. Show the miss (with its separation) where the data source
+  goes; leave the channels blank.
+- **Keep the non-answers in the output as their own verdicts.** `footprint_missed`,
+  `footprint_unreadable`, `no_pointed_data`, `no_coordinates`, `released_before_window` and
+  `fewer_filters_than_requested` send the operator to six different places, and collapsing them into
+  an empty table is how "not checked" gets read as "nothing there". Same rule as the NaN work
+  earlier: report the invalid/undecided fraction beside the result.
+- **Reuse the producer's private helpers by promoting them, not by copying.** Two modules needed the
+  same `;`/`,`-separated designation split; the second copy was avoided by making `coords.split_codes`
+  public, and `mast._read_targets` became `mast.read_targets` when `sets.py` needed it. A private name
+  imported across modules is a rename that was missed.

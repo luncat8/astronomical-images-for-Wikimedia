@@ -178,3 +178,84 @@ def test_dossier_renders_todo_for_missing_fields():
 	assert "Sh2-1" in text
 	assert text.count("<TODO>") >= 10
 	assert "Data licence:" in text
+
+
+def test_auto_fill_answers_the_three_rows_a_machine_can():
+	from astroproc.audit.score import auto_fill
+
+	score = auto_fill(Score(), {"rights": "PUBLIC", "gap": "G0 (article without a lead image)",
+		"verdict": "imaged"})
+	assert score.values == {1: 3, 2: 3, 9: 3, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None, 10: None}
+	assert score.verdict() == "incomplete (7 rows to judge)"
+
+
+def test_auto_fill_leaves_a_row_blank_when_the_evidence_is_missing():
+	from astroproc.audit.score import auto_fill
+
+	score = auto_fill(Score(), {"gap": "G0 (no article, notability unproven)"})
+	assert score.values[1] is None, "an empty rights field is not a licence"
+	assert score.values[9] is None and score.values[2] == 3
+
+
+def test_auto_fill_drops_a_candidate_p18_was_wrong_about():
+	"""`SH 2-20` is illustrated as `RCW 141`: row 2 is the hard gate that stops the work here."""
+	from astroproc.audit.score import auto_fill
+
+	score = auto_fill(Score(), {"rights": "PUBLIC", "gap": "covered", "verdict": "imaged"})
+	assert score.values[2] == 0 and score.verdict() == "drop (hard gate)"
+
+
+def test_a_proprietary_observation_is_a_licence_gate():
+	from astroproc.audit.score import auto_fill
+
+	assert auto_fill(Score(), {"rights": "PROPRIETARY"}).values[1] == 0
+
+
+def test_covering_count_is_enough_for_the_feasibility_row():
+	from astroproc.audit.score import auto_fill
+
+	score = auto_fill(Score(), {"rights": "PUBLIC", "gap": "G0 (article without a lead image)",
+		"n_covering": "2"})
+	assert score.values[9] == 3, "a CSV round-trip makes every field a string"
+
+
+def test_a_missed_pointing_is_reported_as_a_miss_not_as_data():
+	"""`SH 2-7`: an ACS frame 3.84' away has a frame size and a filter, and neither is data."""
+	from astroproc.audit.score import auto_fill, profile
+
+	row = {"designation": "SH 2-7", "gap": "G0 (article without a lead image)", "article": "Sh 2-7",
+		"archive_name": "SH-2-7", "instrument": "ACS", "collection": "HST", "filters": "F814W",
+		"obs_id": "j8ga01hzq", "fov_arcsec": "29x29", "sep_arcsec": "215.9", "rights": "PUBLIC",
+		"verdict": "footprint_missed", "n_covering": "0"}
+	fields = profile(auto_fill(Score(), row), row)
+	assert fields["channels"] == "" and fields["fov"] == "" and fields["obs_id"] == ""
+	assert "misses the object by 215.9 arcsec" in fields["data_source"]
+	assert "somewhere else" in fields["data_source"]
+	text = render_dossier(**fields)
+	assert "Channels:          \n" in text, "an empty channel list is visibly empty, not filled"
+
+
+def test_render_shows_unscored_rows_without_inventing_a_total():
+	text = Score().render()
+	assert "?" in text and "not scored yet" in text
+	assert "total" in text and "/30" not in text
+
+
+def test_profile_puts_the_archive_name_and_the_gap_evidence_in_the_dossier():
+	from astroproc.audit.score import auto_fill, profile
+
+	row = {"designation": "SH 2-252 F", "label": "NGC 2174", "archive_name": "NGC-2174",
+		"aliases": "SH 2-252 F;NGC 2174", "otype": "HII", "ra": "92.293", "dec": "20.48",
+		"gap": "G0 (article without a lead image)", "article": "Sh 2-252", "category": "",
+		"n_category_files": "0", "category_files": "", "lead_image": "", "instrument": "WFC3/IR",
+		"collection": "HST", "filters": "F105W;F125W;F160W", "fov_arcsec": "187x187",
+		"obs_id": "ichx02020", "rights": "PUBLIC", "verdict": "imaged"}
+	score = auto_fill(Score(), row)
+	fields = profile(score, row)
+	text = render_dossier(**fields)
+	assert "NGC-2174" in text and "NGC 2174" in text, "the archive's name is the one that finds the file"
+	assert "article Sh 2-252 has no lead image" in text
+	assert "F105W, F125W, F160W" in text
+	assert "187x187 arcsec" in text
+	assert "Distance:" in text and "<TODO>" in text, "the human fields stay visible"
+	assert "incomplete" in text

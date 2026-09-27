@@ -131,3 +131,15 @@ def test_rows_round_trip_through_csv(monkeypatch, tmp_path):
 	assert len(rows) == 1
 	assert rows[0]["archive_name"] == "NGC-2174" and rows[0]["verdict"] == "imaged"
 	assert rows[0]["fov_arcsec"] == "187x187" and rows[0]["sep_arcsec"] == "0.0"
+
+
+def test_the_resolver_object_type_travels_with_the_target(monkeypatch, tmp_path):
+	"""§6.2.1 measured `otype` as a free false-positive detector; it has to survive the chain."""
+	with_cone(monkeypatch, observation())
+	rows = pointed([{**SH2_252F, "otype": "HII"}])
+	assert rows[0]["otype"] == "HII"
+	path = write_pointed(rows, tmp_path / "pointed.csv")
+	with open(path, encoding="utf-8", newline="") as handle:
+		assert list(csv.DictReader(handle))[0]["otype"] == "HII"
+	rows = pointed([{**SH2_252F, "otype": "PN"}])
+	assert rows[0]["otype"] == "PN" and rows[0]["verdict"] == "imaged"

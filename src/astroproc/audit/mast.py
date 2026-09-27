@@ -9,8 +9,10 @@ and GALEX tiles touch every target in the 2026-09-26 Sharpless run. `pointed` is
 discriminates, and it is three tests in a fixed order, because the cheaper ones are false-positive
 generators and the expensive one is the only verdict:
 
-1. **Was the observation pointed?** A survey footprint is coverage, not opportunity — 6 of 261
-   Sharpless targets had one, and all six turned out to be false positives (§6.3.1).
+1. **Was the observation pointed?** A survey footprint is coverage, not opportunity. A name match
+   on the instrument column produced six of 261 Sharpless targets, and §6.3.1 shows what became of
+   them: one is illustrated under another name, two are articles with no lead image. Pointed-ness
+   itself is decided by an instrument census (`observation_roles`), never by a substring.
 2. **Did the footprint land on the object?** Pointing separation against the instrument footprint
    from the observation's own `s_region`, not the cone radius. `SH 2-7`'s closest HST pointing is
    3.84' from a 29" ACS/HRC field, and no amount of cone radius makes that an image of it.
@@ -57,7 +59,7 @@ POINTED_COLLECTIONS = ("HST", "JWST")
 # `observation_roles` reads this table; a name that is in none of a collection's groups is "unknown".
 UNKNOWN = "unknown"
 COLUMNS = ("obs_collection", "instrument_name", "filters", "obs_id", "target_name", "s_region",
-	"proposal_id", "proposal_pi", "t_obs_release", "dataRights")
+	"proposal_id", "proposal_pi", "t_obs_release", "t_exptime", "dataRights")
 
 
 def observation_roles(collection, instrument):
@@ -74,7 +76,7 @@ def pointed(targets, radius_deg=0.2, imaging_only=True):
 	that can produce an image; the excluded counts are returned as `n_other` so that a table of
 	"no candidate" cannot be the result of a filter that removed everything without saying so.
 	"""
-	rows = _read_targets(targets)
+	rows = read_targets(targets)
 	if not rows:
 		raise SystemExit("no targets to check")
 	out = []
@@ -101,7 +103,10 @@ def _pointed_row(row, radius_deg, imaging_only):
 		separation = footprint.distance_arcsec(observation["region"], coord)
 		scored.append((separation if separation is not None else float("inf"), observation, separation))
 	closest = min(scored, key=lambda entry: entry[0], default=None)
-	result = {"target": row["name"], "n_pointed": len(scored), "n_other": other}
+	# the resolver's object type travels with the target: §6.2.1 measured it as the free
+	# false-positive detector (250 HII, then two planetary nebulae, a bubble and two stars)
+	result = {"target": row["name"], "otype": row.get("otype", ""),
+		"n_pointed": len(scored), "n_other": other}
 	if closest is None:
 		return {**result, "verdict": "no_pointed_data"}
 	_, observation, separation = closest
@@ -150,8 +155,10 @@ def _cone(coord, radius_deg, collections):
 	rows = Observations.query_criteria(coordinates=coord, radius=radius_deg * u.deg,
 		obs_collection=list(collections), dataproduct_type="image")
 	# each column is read once: a cone search returns thousands of rows, and materialising a column
-	# per field per row is the difference between one pass and a quadratic one.
-	columns = {name: _column(rows[name]) for name in COLUMNS}
+	# per field per row is the difference between one pass and a quadratic one. A column the archive
+	# does not publish becomes empty rather than a KeyError: the release date and the exposure time
+	# are convenience, and neither is worth losing a whole cone search to.
+	columns = {name: _column(rows[name]) if name in rows.colnames else [""] * len(rows) for name in COLUMNS}
 	public = _date_cache(columns["t_obs_release"])
 	return [{
 		"collection": columns["obs_collection"][index],
@@ -163,6 +170,7 @@ def _cone(coord, radius_deg, collections):
 		"proposal": columns["proposal_id"][index],
 		"pi": columns["proposal_pi"][index],
 		"public": public[columns["t_obs_release"][index]],
+		"exptime": columns["t_exptime"][index],
 		"rights": columns["dataRights"][index],
 	} for index in range(len(rows))]
 
@@ -205,7 +213,7 @@ def coverage(targets, radius_deg=0.01):
 	import astropy.units as u
 	from astroquery.mast import Observations
 
-	rows = _read_targets(targets)
+	rows = read_targets(targets)
 	if not rows:
 		raise SystemExit("no targets to check")
 
@@ -230,8 +238,9 @@ def coverage(targets, radius_deg=0.01):
 
 def write_pointed(rows, path):
 	"""The pointed rows as CSV — the file `audit commons` and the rubric read next."""
-	fields = ("target", "archive_name", "verdict", "n_pointed", "n_covering", "n_other", "sep_arcsec",
-		"obs_id", "instrument", "filters", "fov_arcsec", "proposal", "pi", "public", "rights")
+	fields = ("target", "otype", "archive_name", "verdict", "n_pointed", "n_covering", "n_other",
+		"sep_arcsec", "obs_id", "instrument", "filters", "fov_arcsec", "proposal", "pi", "public",
+		"rights")
 	with Path(path).open("w", encoding="utf-8", newline="") as handle:
 		writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
 		writer.writeheader()
@@ -239,7 +248,7 @@ def write_pointed(rows, path):
 	return path
 
 
-def _read_targets(targets):
+def read_targets(targets):
 	"""Rows from a CSV path, or the rows themselves."""
 	if isinstance(targets, (str, Path)):
 		return list(csv.DictReader(Path(targets).open(encoding="utf-8")))

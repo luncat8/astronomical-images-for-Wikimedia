@@ -28,8 +28,9 @@ are dated because they drift; §15 lists what to re-read before the first upload
 8. **Do not compete with the mission press offices** for the famous ~200 objects (§6.6), and if you
    want to start producing today, §14.1 is the smallest viable first upload.
 9. **§16 is the reference implementation** of the pipeline as a scripted, config-driven chain —
-   the reproducibility claim (§7.9) is backed by running code, not intent. Its coverage audit
-   (`astroproc audit sparql`, then `astroproc audit coords`, then `astroproc audit mast`) is
+   the reproducibility claim (§7.9) is backed by running code, not intent. Its coverage audit runs
+   `sparql → coords → pointed|sets → commons → score`, in that order and for the reason §6.3 gives:
+   each step exists to make the next one's question smaller, and the order is the argument. It is
    documented against live Wikidata, Sesame and MAST behaviour in §6.2.1 and §6.3.1.
 
 ---
@@ -76,9 +77,14 @@ accepts an uploaded target list, which turns this into a to-do list of *objects 
 no picture*. **Coordinates are the missing link, not the image test:** 0 of 327 Sharpless entries
 and 0 of 173 RCW entries in Wikidata carry P625, so §6.3 needs a name resolver (Sesame, SIMBAD,
 VizieR, HEASarc) before any target list can be built — `astroproc audit coords` is that step and
-resolves 261 of 273 Sharpless gaps (§6.3.1). Triage with SkyView or a PS1 cutout first to discard
-single stars, duplicates and asterisms. Score the survivors (§6.5) and commit to 5–10 targets.
-Processing 300 candidates is the classic failure mode.
+resolves 261 of 273 Sharpless gaps (§6.3.1). Then run §6.3's checks in its order, because each one
+is a different question and only the last two shrink the list: **was it pointed** (a survey tile is
+coverage, not opportunity — 6 of 261 here), **did the footprint land on the object** (`audit
+pointed`), **are there enough filters for colour and is the data newly public** (`audit sets`),
+**is the gap real** (`audit commons`: Commons category, article lead image, and the archive's own
+name for the target), and only then the score (`audit score`, §6.5) and the dossier (§13.1).
+Triage with SkyView or a PS1 cutout first to discard single stars, duplicates and asterisms; commit
+to 5–10 targets. Processing 300 candidates is the classic failure mode.
 
 **0.C — "I just want to produce something new."** Two different games; choose deliberately.
 *Learn the chain safely* (recommended first): take a famous object that already has an excellent
@@ -358,6 +364,41 @@ uncontroversial and nobody has beaten you to it.
 **ADS** paper about the object whose figure is monochrome. That one citation establishes the data,
 the scientific interest, *and* the gap.
 
+#### The four tests, in order — and why the order is the method
+
+"Asking the archive whether data exists" is the wrong question, because the answer is yes for
+almost everything: TESS sectors and GALEX tiles cover the whole sky, so all 261 Sharpless targets
+answered "yes" and the check discriminated nothing (§6.3.1). Four questions do discriminate, and the
+order is the method: tests 1 and 2 remove the observations that are not pictures of the object,
+test 3 and the release window identify the data that could become one, and test 4 decides whether it
+should.
+
+| # | Question | Test | Why it is asked here |
+|---|---|---|---|
+| 1 | Was the observation **pointed**? | the mission's instrument census, not a name match: `HST`/`JWST` imaging instruments only, acquisition and spectroscopy counted separately | a survey footprint is coverage, not an opportunity — six of 261 had a pointed observation, and §6.3.1 shows what became of them (one illustrated under another name, two G0 articles) |
+| 2 | Did the **footprint** land on the object? | the observation's own `s_region` polygon/circle against the target's coordinates, not the cone radius | `SH 2-7`'s closest HST pointing is 3.84' from a 29" ACS/HRC field — eight fields of empty sky, and "within 0.2°" says it is data |
+| 3 | Are there **enough filters** for colour, and how **recent** is the data? | distinct filters of one program with one detector, against the §5 minimum; release date against the current window | this is the archive-first variant below: three filters released last year is an opportunity, one filter from 2006 is a grayscale upload or somebody else's job |
+| 4 | Is the **gap** real, under every alias? | Wikidata P18 *and* the Commons category *and* the article lead image *and* the archive's own name for the target | P18 is a proxy that fails in both directions (the Commons check below): it misses the article without a lead image, and it calls `SH 2-20` a gap when Commons has the file as `RCW 141` |
+
+Each test is a command, and each writes the file the next one reads:
+
+```
+astroproc audit sparql --prefix "SH 2-" --class Q11282 --out out/gaps.csv
+astroproc audit coords --csv out/gaps.csv --out out/coords.csv
+astroproc audit pointed out/coords.csv --radius 0.2 --out out/pointed.csv    # tests 1-2
+astroproc audit sets    out/coords.csv --min-filters 3 --since 2024-01-01    # test 3
+astroproc audit commons out/gaps.csv --targets out/pointed.csv --out out/candidates.csv   # test 4
+astroproc audit score   out/candidates.csv --set 6=3 ...                     # §6.5, §13.1
+```
+
+Two rules keep the output honest. A row that is not an answer is **counted, never dropped** — the
+verdicts `no_pointed_data`, `footprint_missed`, `footprint_unreadable`, `no_coordinates`,
+`released_before_window` and `fewer_filters_than_requested` are six different facts about the
+archive, and collapsing them into an empty table is how "not checked" is read as "nothing there".
+And a target list that is a **deliberate shortlist** is taken as given: `--all-targets` checks every
+row whatever the archive said, because a target the HST pointings missed is still a candidate for a
+ground-based archive — the false positives are the ones that are not (checked, and answered).
+
 Keep one row per candidate — filters, existing colour image?, S/N, interesting?, licence/provenance,
 score — so the shortlist is argued rather than accumulated.
 
@@ -393,6 +434,55 @@ Three consequences:
    here, absent for all six) and treat full-text hits as evidence to read, not as a count. And an
    absent category is weak evidence in the other direction too — categories hide files.
 
+#### The archive-first variant: multi-filter sets
+
+For an operator who wants to produce something *today*, the catalogue axis is the slow one: it is
+measured to be exhausted for Sharpless (§6.3.1), and its answer is a target, not data. Enumerate
+from the archive instead — this is §6.4 method 4 with the timeliness axis built in, and it is
+`astroproc audit sets`:
+
+- a **set** is one program's pointing with one detector (`(collection, instrument, proposal)`,
+  plus the archive's target name). A program is the unit that chose a coherent filter set, so its
+  filters are the ones that were meant to be compared; merging a decade of observations into a list
+  of wavelengths nothing observed together invents a composite the data cannot support, and mixing
+  detectors across a set is the §7.4 alignment problem rather than a filter change;
+- the set's release date is its **last** exposure's, because that is when the set became usable; an
+  unknown date is not an old one, and stays visible as unknown;
+- the output is ranked by release date and then by filter count, and each row carries the
+  **frame of the deepest exposure** — the difference between "a filter set" on a 187" WFC3/IR field
+  and one on a 29" ACS/HRC field is whether the object fits in the picture at all;
+- two filters are accepted when the caller says so (`--min-filters 2`): HOO and narrowband pairs are
+  a documented mapping (§5), and a two-filter candidate that is newly public is a better first
+  upload than a three-filter one from 2006.
+
+The niche this targets is named in §5.3: infrared multi-filter data whose colour rendering nobody
+has published. It is also the honest answer to 0.C — the data is new, the object is real, and the
+gap is checkable rather than arguable.
+
+#### Is the gap real? The Commons check, and the order it goes in
+
+The archive audit says *data exists*; it does not say the object is unillustrated. Three signals,
+in decreasing order of authority, and only the first two are a verdict:
+
+1. **the Commons category sitelink** on the Wikidata item — exact membership, and it hides files,
+   so an absent category is weak evidence in the other direction;
+2. **the English Wikipedia lead image** — an article with *no* lead image is the purest form of G0
+   and is invisible to P18;
+3. the full-text search on the designation — **noise**, printed as evidence to read and never
+   counted: CirrusSearch strips punctuation, so `"SH 2-1"` returns a widefield rho Ophiuchi shot and
+   an 1890s hymnal.
+
+The check runs on the designations the archive audit survived *and* on cross-identifications, since
+the archive names a target with whichever code it resolved. The **archive's own name for the
+target** goes into the candidate row for the same reason: the WFC3/IR file fetched as `SH 2-252 F`
+declares `TARGNAME = NGC 2174`, and NGC 2174 is illustrated on Commons ten times over — a fact no
+P528 list and no SIMBAD cross-identification produced.
+
+What a machine can settle ends here: **covered** (drop it — row 2 of §6.5 is a hard gate, and this
+is the check that stops the work) or **G0**, split into "article without a lead image" and "no
+article either", because the second leaves §6.5 row 3 (notability) open. G1–G4 are decided by
+reading the files that exist, not by an API.
+
 ### 6.4 Methods 3 and 4 — reverse audit, and timeliness
 
 Browse a category of astronomical objects on Commons and look for **monochrome or over-saturated**
@@ -422,6 +512,15 @@ Score 0–3 per row. **A 0 on row 1 or row 2 drops the candidate immediately.**
 | 8 | **Orientation and star colour are verifiable** against a survey image | §7.6 |
 | 9 | **Reachable with your equipment, or the data is archived** | feasibility |
 | 10 | **Educational / informative value, not just prettiness** | what an article actually needs |
+
+**Which rows a machine can fill, and which it must not.** Three, from the audit row: row 1 from the
+archive's own rights field (a proprietary observation is a 0 and a hard gate; an empty field leaves
+the row blank rather than passing it), row 2 from the Commons verdict, and row 9 from whether a
+pointed footprint covers the object. The other seven are judgement — notability, S/N, colour mode,
+hard core, framing, the §7.6 reference check, educational value — and stay visibly unscored.
+`astroproc audit score` prints the rubric and the §13.1 dossier for each candidate and takes
+`--set ROW=VALUE` to complete one by hand: a case that scores without a human is a case nobody
+argued, and the shortlist is supposed to be argued.
 
 Keep the shortlist at 5–10. If two candidates tie, prefer the one with the simpler licence.
 
@@ -817,12 +916,15 @@ self-contained so a fork can reimplement without reading the code.
 | `session.py` | §13.2 | fills the 21-line log template *while* the pipeline runs, plus machine-readable `params.json`; human-only fields remain visible `<TODO>` markers |
 | `config.py` | D3 | TOML run contract (see 16.2); validates channels, anchor, throughput, stretch keys, post ranges |
 | `pipeline.py` | §7 | enforces the order, refuses already-stretched inputs, saturation-masks before the stretch, assigns colour before the stretch, forks the two outputs after it |
-| `cli.py` | — | `state` / `process` / `verify` / `audit` |
+| `cli.py` | — | `state` / `process` / `verify` / `audit`; the audit subcommands are the §6.3 chain, one file each: `sparql` → `coords` → `pointed` \| `sets` → `commons` → `score` |
 | `audit/http.py` | — | the retry contract every remote service needs: retry a read timeout, wait out a 429 per `Retry-After`, never retry a server-side 504 |
 | `audit/sparql.py` | §6.2, 0.B | Wikidata P18 batch audit: search-index enumeration with a class-anchored SPARQL fallback (§6.2.1), batched detail pass for labels, coordinates and the alias set; the client-side prefix guard repeats the *server's* matching rule, per path; fetch separated from parse |
 | `audit/coords.py` | §6.2.1, §6.3 | designation → ICRS coordinates through Sesame, batched, with the answering catalogue recorded; a name that fails is retried with the cross-identifications the audit already collected; writes the `name,ra,dec` CSV `audit mast` consumes |
-| `audit/mast.py` | §6.3 | observation coverage for a target list (CSV: name,ra,dec), cone radius explicit, targets without coordinates counted and skipped; DRZ/DRC/CAL/I2D product fetch |
-| `audit/score.py` | §6.5, §13.1 | 10-row rubric with hard gates on rows 1–2, dossier renderer |
+| `audit/mast.py` | §6.3 tests 1–2 | observation coverage for a target list (CSV: name,ra,dec), cone radius explicit, targets without coordinates counted and skipped; the **pointed** verdict: role-table instrument census, footprint separation, the archive's own `target_name` for the object, and the resolver's `otype` carried through as the false-positive detector of §6.2.1; DRZ/DRC/CAL/I2D product fetch |
+| `audit/footprint.py` | §6.3 test 2 | the observation's own `s_region` geometry: POLYGON/CIRCLE parse, distance from a coordinate to the nearest edge (0 inside), bounding box as the frame size — no footprint table that could drift from the instrument it describes |
+| `audit/sets.py` | §6.3 test 3, §6.4 method 4 | pointed, covering, multi-filter sets that are newly public: one row per program-and-detector set, its distinct filters, the deepest exposure's frame and its last release date; a set released before the window, or with too few filters, keeps its own verdict instead of disappearing |
+| `audit/commons.py` | §6.2, §6.3 test 4, §6.5 row 2 | is the gap real: batched `wbgetentities`, the Commons category sitelink as the exact signal, the article lead image, the full-text search kept as evidence; `candidates` joins the gap shortlist to the archive's answers and classifies the gap (`covered`, G0 with or without an article) |
+| `audit/score.py` | §6.5, §13.1 | 10-row rubric with hard gates on rows 1–2; `auto_fill` answers only rows 1, 2 and 9 from the audit row (rights, gap, coverage) and leaves the other seven visibly unscored; dossier renderer fed from the candidate row |
 
 `experiments/fetch_data.py` fetches a real pointed dataset (plan §4.4): it constructs the MAST
 Download URIs directly, because the product-listing service was failing for every observation while
@@ -864,15 +966,24 @@ params.json             the same record, machine-readable
 TAN WCS — and asserts, end to end, that planted blue/white/red stars read blue/white/red after the
 full pipeline (sampled in the star wings: cores sit on the stretch asymptote), that mirrored and
 rotated WCS is detected, that stretched input is refused, that the log is complete, and that a
-white patch stays white after sky-match gains. `experiments/demo_run.py` produces a demo SHO
+white patch stays white after sky-match gains. The audit half is tested the same way: footprint
+geometry against the real 25-vertex WFC3/IR `s_region`, the pointed verdict against the observations
+the 2026-09-26 run actually returned (`SH 2-7`'s 3.84' miss, `SH 2-252 F`'s `NGC-2174`), the set
+grouping against filters split across programs, the gap classifier against the `SH 2-20`/`RCW 141`
+case, the rubric against the hard gates, and the chain itself driven end to end through the CLI
+(`tests/test_chain.py`) so that the CSV one command writes is the CSV the next one reads. `experiments/demo_run.py` produces a demo SHO
 composite plus its log; `experiments/stretch_perf.py` measures the hot path (~115 Mpixel/s at 4k²,
 one float32 scratch buffer). `experiments/live_audit.py` is the network half: it counts the
 Wikidata gaps per catalogue through both enumeration paths, prints shortlists, resolves the
 Sharpless gaps to coordinates and runs the §6.3 cone search on all 261 that resolved
 (`experiments/logs/live-audit.log`, which is what §6.2.1 and §6.3.1 record).
-`experiments/commons_gap.py` is the part P18 cannot do: it takes the gap CSV and, per candidate,
-reports the cross-identifications, the Commons category, the enwiki lead image and — labelled as
-noise — the full-text hits (`experiments/logs/commons-gap.log`).
+`experiments/commons_gap.py` is the earlier, standalone form of the §6.3 test-4 report: it takes
+the gap CSV and, per candidate, prints the cross-identifications, the Commons category, the enwiki
+lead image and — labelled as noise — the full-text hits (`experiments/logs/commons-gap.log`). It is
+kept because it is what the live run actually produced; `audit commons` is the same check wired
+into the chain. `experiments/audit_chain.py` replays the whole tail offline against fixtures — the
+default chain (only the archive's answers are checked) and `--all-targets` (a curated shortlist) —
+so the wiring between the CSVs is visible without a network (`experiments/logs/audit-chain.log`).
 
 The chain, end to end, exactly as run for §6.3.1:
 
@@ -880,4 +991,13 @@ The chain, end to end, exactly as run for §6.3.1:
 astroproc audit sparql --prefix "SH 2-" --class Q11282 --out out/sharpless-gaps.csv
 astroproc audit coords --csv out/sharpless-gaps.csv --out out/sharpless-coords.csv
 astroproc audit mast out/sharpless-coords.csv --radius 0.1
+```
+
+and the ordered form of §6.3, each step writing the file the next one reads:
+
+```
+astroproc audit pointed out/sharpless-coords.csv --radius 0.2 --out out/pointed.csv
+astroproc audit sets    out/sharpless-coords.csv --min-filters 3 --since 2024-01-01 --out out/sets.csv
+astroproc audit commons out/sharpless-gaps.csv --targets out/pointed.csv --out out/candidates.csv
+astroproc audit score   out/candidates.csv --set 6=3 --set 3=2 ...
 ```

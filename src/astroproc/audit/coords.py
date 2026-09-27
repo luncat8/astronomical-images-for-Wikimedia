@@ -160,8 +160,8 @@ def _read_designations(csv_path):
 		raise SystemExit(f"{csv_path} needs one of these columns: {', '.join(DESIGNATION_COLUMNS)}")
 	rows = []
 	for record in reader:
-		codes = _split_codes(record.get(column, ""))
-		others = _split_codes(record.get("aliases", "")) if "aliases" in columns else []
+		codes = split_codes(record.get(column, ""))
+		others = split_codes(record.get("aliases", "")) if "aliases" in columns else []
 		names = codes + [alias for alias in others if alias not in codes]
 		if not names:
 			continue
@@ -169,7 +169,8 @@ def _read_designations(csv_path):
 	return rows
 
 
-def _split_codes(cell):
+def split_codes(cell):
+	"""The designations in one CSV cell: `;`- or `,`-separated, trimmed, empties dropped."""
 	return [code.strip() for code in cell.replace(",", ";").split(";") if code.strip()]
 
 

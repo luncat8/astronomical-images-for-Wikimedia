@@ -1,0 +1,74 @@
+
+==== audit pointed: what the archive calls each target, and did it land on it (tests 1-2)
+
+  SH 2-252 F  archive: NGC-2174  WFC3/IR F105W FOV 187x187"  inside a footprint  3/3 covering  ichx02020 (programme 13623, Levay, Zolt, public 2014-05-19)
+  SH 2-7  archive: SH-2-7  ACS F814W FOV 29x29"  215.9 arcsec outside  0/1 covering  j8ga01hzq (programme 10775, PI, public 2006-08-01)
+  SH 2-20  archive: RCW-141  ACS/WFC F606W;F814W FOV 202x202"  inside a footprint  1/1 covering  o6d601 (programme 10775, PI, public 2006-08-01)
+  SH 2-289  archive: SH-2-289  WFC3/IR F110W FOV 187x187"  inside a footprint  2/2 covering  new02010 (programme 17500, Someone, public 2025-09-01)
+  SH 2-106 A  no coordinates — resolve it first (`audit coords`)
+
+3 target(s) imaged by a pointed observation, 0 with no pointed observation in the cone, 1 unresolved
+
+==== audit sets: pointed + covering + multi-filter + newly public (tests 1-3)
+
+  SH 2-289  archive: SH-2-289  WFC3/IR on HST F110W;F160W (2 filters, 2 exp, deepest 900s) 187x187"  public 2025-09-01  17500 (Someone)
+  SH 2-252 F  archive: NGC-2174  3 filters (F105W;F125W;F160W) released 2014-05-19 — before the window
+  SH 2-20  archive: RCW-141  2 filters (F606W;F814W) released 2006-08-01 — before the window
+
+1 colour set(s) of 5 target row(s); 2 released before the window, 0 with fewer than 2 filters, 1 whose pointed data misses the object, 0 with no readable footprint, 0 with no pointed observation in the cone, 1 unresolved
+
+==== audit commons: only the designations the archive answered for (default)
+
+  SH 2-252 F  Q639464  covered  imaged
+      2 file(s) in Category:NGC 2174; lead image https://upload.wikimedia.org/NGC2174.jpg
+  SH 2-20  Q1  covered  imaged
+      2 file(s) in Category:RCW 141; lead image https://upload.wikimedia.org/RCW141.jpg
+  SH 2-289  Q2  G0 (no article, notability unproven)  imaged
+      no category, no article, nothing illustrates it
+
+3 candidate(s) checked of 4 gap row(s) — the rest were not answered for by the archive audit: 1 still a gap, 2 already illustrated (P18 was wrong about those)
+
+==== audit commons --all-targets: a curated shortlist is taken as given
+
+  SH 2-252 F  Q639464  covered  imaged
+      2 file(s) in Category:NGC 2174; lead image https://upload.wikimedia.org/NGC2174.jpg
+  SH 2-7  Q88634040  G0 (article without a lead image)  footprint_missed
+      article Sh 2-7, no lead image
+  SH 2-20  Q1  covered  imaged
+      2 file(s) in Category:RCW 141; lead image https://upload.wikimedia.org/RCW141.jpg
+  SH 2-289  Q2  G0 (no article, notability unproven)  imaged
+      no category, no article, nothing illustrates it
+
+4 candidate(s) checked of 4 gap row(s) — the rest were not answered for by the archive audit: 2 still a gap, 2 already illustrated (P18 was wrong about those)
+
+==== audit score SH 2-7: the three machine rows filled, the seven human ones visible
+
+row score criterion
+--- ----- ---------
+  1     3 data licence is clean and identified (hard gate. No licence, no upload.)
+  2     3 a real coverage gap exists (G0/G1/G4) (the whole point)
+  3     3 the object is notable enough for Commons (article or catalogue entry editors would plausibly want illustrated)
+  4     2 data is high enough S/N to look good (3 = abundant, 1 = marginal)
+  5     3 object type suits the colour mode available (plan §5)
+  6     3 no hard core unless HDR-capable (clipped cores are the classic amateur failure)
+  7     2 field of view suits the article (a 0.5 deg frame of a 3 deg object may be worse than useless)
+  8     1 orientation and star colour verifiable (plan §7.6)
+  9     2 reachable with your equipment or the data is archived (feasibility)
+ 10     2 educational value, not just prettiness (what an article actually needs)
+total 24/30 -> pursue
+
+Object:            SH 2-7 (SH-2-7)   Aliases: RCW 11
+Type:              HII   RA/Dec (equinox): 83.0 -4.0 (ICRS)   FOV / scale: 
+Distance:          <TODO> — <TODO>   Notable? enwiki: Sh 2-7
+Gap type:          G0 (article without a lead image)   Evidence: article Sh 2-7 has no lead image
+Colour mode:       <TODO>
+Data source:       ACS (MAST archive); nearest pointed observation (SH-2-7) misses the object — the data for this candidate has to come from somewhere else — retrieved <TODO>
+Obs ID:               MAST DOI: <TODO>   Data licence: PUBLIC (archive rights field; tag per plan §4.3)
+Product level:     <TODO>
+Channels:          
+Reference image:   <TODO>
+Score:             24/30
+Verdict:           pursue
+
+
+artifacts in /home/user/astronomical-images-for-Wikimedia/experiments/out/audit-chain

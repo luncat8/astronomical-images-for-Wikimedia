@@ -1,7 +1,9 @@
 """Command line: state inspection, pipeline runs, verification, coverage audit."""
 
 import argparse
+import csv
 import sys
+from collections import Counter
 from pathlib import Path
 
 from . import __version__
@@ -46,6 +48,41 @@ def main(argv=None):
 	p_pointed.add_argument("--all-modes", action="store_true",
 		help="count acquisition and spectroscopy modes as pointed (they are not pictures)")
 	p_pointed.add_argument("--out", default=None, help="write the rows as CSV")
+
+	p_sets = audit_sub.add_parser(
+		"sets", help="pointed, covering, multi-filter sets that are newly public (the archive-first axis)"
+	)
+	p_sets.add_argument("targets", help="CSV with columns name,ra,dec")
+	p_sets.add_argument("--radius", type=float, default=0.2,
+		help="cone radius in degrees; wide, because a pointing that misses is still worth reading")
+	p_sets.add_argument("--min-filters", type=int, default=3,
+		help="filters a set needs before colour is defensible (plan §5: 3 for a stated mapping, 2 for HOO)")
+	p_sets.add_argument("--since", default="", metavar="YYYY-MM-DD",
+		help="keep sets released on or after this date; older sets are reported, not hidden")
+	p_sets.add_argument("--all-modes", action="store_true",
+		help="count acquisition and spectroscopy modes as pointed (they are not pictures)")
+	p_sets.add_argument("--out", default=None, help="write all rows as CSV")
+
+	p_commons = audit_sub.add_parser(
+		"commons", help="is the gap real: Commons category, article image and gap class (plan §6.5 row 2)"
+	)
+	p_commons.add_argument("gaps", help="CSV from `audit sparql --out` (designation, aliases, item, ...)")
+	p_commons.add_argument("--targets", default=None,
+		help="CSV from `audit pointed` / `audit sets`: the shortlist to check")
+	p_commons.add_argument("--all-targets", action="store_true",
+		help="check every row of the shortlist, not only the ones the archive answered for")
+	p_commons.add_argument("--search", action="store_true",
+		help="also run the Commons full-text search and keep its hits as evidence to read")
+	p_commons.add_argument("--out", default=None, help="write the candidates as CSV, the input to `audit score`")
+
+	p_score = audit_sub.add_parser(
+		"score", help="rubric and §13.1 dossier for the candidates, machine rows filled in"
+	)
+	p_score.add_argument("candidates", help="CSV from `audit commons --out`")
+	p_score.add_argument("--designation", action="append", default=None, help="score only this designation (repeatable)")
+	p_score.add_argument("--set", action="append", default=[], metavar="ROW=VALUE",
+		help="fill a rubric row by hand, e.g. --set 6=3; repeatable")
+	p_score.add_argument("--out", default=None, help="write the dossiers to a file instead of the terminal")
 
 	p_coords = audit_sub.add_parser(
 		"coords", help="resolve designations to coordinates — the input the MAST check needs"
@@ -131,13 +168,130 @@ def cmd_audit(args):
 		return 0
 	if args.audit_cmd == "pointed":
 		return cmd_pointed(args)
+	if args.audit_cmd == "sets":
+		return cmd_sets(args)
+	if args.audit_cmd == "commons":
+		return cmd_commons(args)
+	if args.audit_cmd == "score":
+		return cmd_score(args)
 	if args.audit_cmd == "coords":
 		return cmd_coords(args)
 	return 1
 
 
+def cmd_sets(args):
+	"""The archive-first axis of §6.3: what could be composited, and how recently it became public.
+
+	Sets that fail on the release window or the filter count are printed too — they are the two
+	answers a colourist can act on later ("imaged in colour depth in 2011 and never composited").
+	The rest are counted, because 261 lines of "no pointed data" is what `audit pointed` is for.
+	"""
+	from .audit import sets as sets_module
+
+	rows = sets_module.colour_sets(args.targets, radius_deg=args.radius, since=args.since,
+		min_filters=args.min_filters, imaging_only=not args.all_modes)
+	if args.out:
+		sets_module.write_sets(rows, args.out)
+	answers = [row for row in rows if row["verdict"] == sets_module.COLOUR_SET]
+	for row in sorted(answers, key=lambda row: (row["public"], row["n_filters"]), reverse=True):
+		print(format_set(row))
+	for row in rows:
+		if row["verdict"] in (sets_module.OLD_RELEASE, sets_module.TOO_FEW_FILTERS):
+			print(format_stale(row))
+	census = Counter(row["verdict"] for row in rows)
+	print(f"\n{census[sets_module.COLOUR_SET]} colour set(s) of {len(rows)} target row(s); "
+		f"{census[sets_module.OLD_RELEASE]} released before the window, "
+		f"{census[sets_module.TOO_FEW_FILTERS]} with fewer than {args.min_filters} filters, "
+		f"{census[sets_module.MISSED]} whose pointed data misses the object, "
+		f"{census[sets_module.UNREADABLE]} with no readable footprint, "
+		f"{census[sets_module.NO_POINTED_DATA]} with no pointed observation in the cone, "
+		f"{census[sets_module.NO_COORDINATES]} unresolved")
+	if args.out:
+		print(f"wrote {args.out}", file=sys.stderr)
+	return 0
+
+
+def format_set(row):
+	"""One line per set: what it would be made from, how deep it is, and when it became public."""
+	frame = f"{row['fov_arcsec']}\"" if row.get("fov_arcsec") not in (None, "", "-") else "frame unreadable"
+	exptime = f", deepest {float(row['exptime_s']):.0f}s" if row.get("exptime_s") else ""
+	release = row["public"] or "no release date in the archive row"
+	identity = f"  archive: {row['archive_name']}" if row.get("archive_name") else ""
+	return (f"  {row['target']}{identity}  {row['instrument']} on {row['collection']} "
+		f"{row['filters']} ({row['n_filters']} filters, {row['n_exposures']} exp{exptime}) {frame}  "
+		f"public {release}  {row['proposal']} ({row['pi']})")
+
+
+def format_stale(row):
+	"""A set that is not a colour set, for its own reason — never as one blank answer."""
+	if row["verdict"] == "released_before_window":
+		return (f"  {row['target']}  archive: {row['archive_name']}  {row['n_filters']} filters "
+			f"({row['filters']}) released {row['public']} — before the window")
+	return (f"  {row['target']}  archive: {row['archive_name']}  only {row['n_filters']} filter(s) "
+		f"({row['filters']}) — not enough for colour")
+
+
+def cmd_commons(args):
+	"""The check P18 cannot do: a gap the item does not show and a category that hides (§6.2, §6.3.1)."""
+	from .audit.commons import COVERED, candidates, write_candidates
+
+	rows = candidates(args.gaps, targets=args.targets, searched=args.search,
+		answered_only=not args.all_targets)
+	for row in rows:
+		print(format_candidate(row))
+	gaps = sum(row["gap"] != COVERED for row in rows)
+	covered = sum(row["gap"] == COVERED for row in rows)
+	print(f"\n{len(rows)} candidate(s) checked of {len(_read_rows(args.gaps))} gap row(s) "
+		f"— the rest were not answered for by the archive audit: {gaps} still a gap, "
+		f"{covered} already illustrated (P18 was wrong about those)")
+	if args.out:
+		write_candidates(rows, args.out)
+		print(f"wrote {args.out}", file=sys.stderr)
+	return 0
+
+
+def format_candidate(row):
+	"""One line per candidate: the gap class, what illustrates it or does not, and the evidence."""
+	evidence = "; ".join(part for part in (
+		f"{row['n_category_files']} file(s) in {row['category']}" if row["category"] else "",
+		f"lead image {row['lead_image']}" if row["lead_image"] else "",
+		f"article {row['article']}, no lead image" if row["article"] and not row["lead_image"] else "",
+	) if part) or "no category, no article, nothing illustrates it"
+	live = f"  {row['verdict']}" if row.get("verdict") else ""
+	return f"  {row['designation']}  {row['item']}  {row['gap']}{live}\n      {evidence}"
+
+
+def cmd_score(args):
+	"""Rubric + dossier per candidate. The three rows the audit answers are filled; the rest stay ?."""
+	from .audit.score import Score, auto_fill, profile, render_dossier
+
+	rows = [row for row in _read_rows(args.candidates)
+		if not args.designation or row["designation"].strip() in set(args.designation)]
+	if not rows:
+		raise SystemExit(f"no candidate in {args.candidates} matched {args.designation or 'the file'}")
+	blocks = []
+	for row in rows:
+		score = auto_fill(Score(), row)
+		for pair in args.set:
+			row_number, _, value = pair.partition("=")
+			score.set(int(row_number), int(value))
+		blocks.append(f"{score.render()}\n\n{render_dossier(**profile(score, row))}")
+	text = "\n".join(blocks)
+	if args.out:
+		Path(args.out).write_text(text, encoding="utf-8")
+		print(f"wrote {args.out}", file=sys.stderr)
+		return 0
+	print(text)
+	return 0
+
+
+def _read_rows(path):
+	with Path(path).open(encoding="utf-8") as handle:
+		return list(csv.DictReader(handle))
+
+
 def cmd_pointed(args):
-	"""The three tests of §6.3.1, in order, one line per target."""
+	"""Tests 1 and 2 of §6.3, in order, one line per target: pointed, then did it land on the object."""
 	from .audit.mast import pointed, write_pointed
 
 	rows = pointed(args.targets, radius_deg=args.radius, imaging_only=not args.all_modes)
