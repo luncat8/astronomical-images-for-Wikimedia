@@ -37,6 +37,15 @@ def main(argv=None):
 	p_mast = audit_sub.add_parser("mast", help="MAST observation coverage for a target list")
 	p_mast.add_argument("targets", help="CSV with columns name,ra,dec")
 	p_mast.add_argument("--radius", type=float, default=0.01, help="cone radius in degrees (0.01 = 36 arcsec)")
+	p_pointed = audit_sub.add_parser(
+		"pointed", help="did a pointed observation image each target, and what does the archive call it"
+	)
+	p_pointed.add_argument("targets", help="CSV with columns name,ra,dec")
+	p_pointed.add_argument("--radius", type=float, default=0.2,
+		help="cone radius in degrees; wide, because a pointing that misses is still worth reading")
+	p_pointed.add_argument("--all-modes", action="store_true",
+		help="count acquisition and spectroscopy modes as pointed (they are not pictures)")
+	p_pointed.add_argument("--out", default=None, help="write the rows as CSV")
 
 	p_coords = audit_sub.add_parser(
 		"coords", help="resolve designations to coordinates — the input the MAST check needs"
@@ -120,9 +129,56 @@ def cmd_audit(args):
 		if skipped:
 			print(f"{skipped} target(s) had no coordinates and were skipped — resolve them first (`audit coords`)")
 		return 0
+	if args.audit_cmd == "pointed":
+		return cmd_pointed(args)
 	if args.audit_cmd == "coords":
 		return cmd_coords(args)
 	return 1
+
+
+def cmd_pointed(args):
+	"""The three tests of §6.3.1, in order, one line per target."""
+	from .audit.mast import pointed, write_pointed
+
+	rows = pointed(args.targets, radius_deg=args.radius, imaging_only=not args.all_modes)
+	for row in rows:
+		print(format_pointed(row))
+	candidates = [row for row in rows if row["verdict"] == "imaged"]
+	others = sum(row.get("n_other", 0) for row in rows)
+	no_coords = sum(row["verdict"] == "no_coordinates" for row in rows)
+	skipped = sum(row["verdict"] == "no_pointed_data" for row in rows)
+	print(f"\n{len(candidates)} target(s) imaged by a pointed observation, "
+		f"{skipped} with no pointed observation in the cone, {no_coords} unresolved")
+	if others:
+		print(f"{others} observation(s) excluded as acquisition, spectroscopy or unknown mode", file=sys.stderr)
+	if args.out:
+		write_pointed(rows, args.out)
+		print(f"wrote {args.out}", file=sys.stderr)
+	return 0
+
+
+def format_pointed(row):
+	"""Audit line: what the archive calls the target, and whether the footprint landed on it.
+
+	The archive's own name is printed first because it is the answer the audit is for: `SH 2-252 F`
+	images as `NGC-2174`, which is how the object is already illustrated on Commons.
+	"""
+	if row["verdict"] == "no_coordinates":
+		return f"  {row['target']}  no coordinates — resolve it first (`audit coords`)"
+	if row["verdict"] == "no_pointed_data":
+		return f"  {row['target']}  no pointed observation in the cone ({row['n_other']} other mode(s))"
+	separation = _separation_text(row)
+	return (f"  {row['target']}  archive: {row['archive_name']}  {row['instrument']} {row['filters']} "
+		f"FOV {row['fov_arcsec']}\"  {separation}  {row['n_covering']}/{row['n_pointed']} covering"
+		f"  {row['obs_id']} (programme {row['proposal']}, {row['pi']}, public {row['public']})")
+
+
+def _separation_text(row):
+	if row["n_covering"]:
+		return "inside a footprint"
+	if row["sep_arcsec"] is None:
+		return "footprint unreadable"
+	return f"{row['sep_arcsec']} arcsec outside"
 
 
 def cmd_coords(args):

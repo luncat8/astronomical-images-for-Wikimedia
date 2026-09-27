@@ -1,0 +1,21 @@
+=== JWST: 13353 rows, 20 instrument names (MJD 60900-61010)
+  NIRSPEC/MSA              4334
+  MIRI/IFU                 2548
+  NIRCAM/IMAGE             2223
+  NIRSPEC/SLIT             1045
+  NIRSPEC/IFU              1026
+  NIRSPEC                  602
+  MIRI/IMAGE               552
+  NIRISS/IMAGE             266
+  NIRCAM/CORON             240
+  FGS/FGS1                 136
+  MIRI/CORON               118
+  MIRI/SLIT                70
+  NIRISS/AMI               64
+  NIRCAM/GRISM             34
+  NIRISS/SOSS              31
+  MIRI/SLITLESS            29
+  MIRI/TARGACQ             11
+  NIRISS/WFSS              10
+  NIRCAM/TARGACQ           8
+  FGS/FGS2                 6
